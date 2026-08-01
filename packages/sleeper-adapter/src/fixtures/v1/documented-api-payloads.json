@@ -1,0 +1,64 @@
+[
+  {
+    "mapperVersion": "1",
+    "endpoint": "league",
+    "url": "https://api.sleeper.app/v1/league/289646328504385536",
+    "fetchedAt": "2026-08-01T00:00:00.000Z",
+    "raw": {
+      "total_rosters": 12,
+      "status": "in_season",
+      "sport": "nfl",
+      "settings": { "playoff_teams": 6 },
+      "season_type": "regular",
+      "season": "2018",
+      "scoring_settings": { "pass_td": 6 },
+      "roster_positions": ["QB", "RB", "WR", "TE", "FLEX", "DEF", "BN"],
+      "previous_league_id": "198946952535085056",
+      "name": "Sleeperbot Friends League",
+      "league_id": "289646328504385536",
+      "draft_id": "289646328508579840",
+      "avatar": "efaefa889ae24046a53265a3c71b8b64"
+    }
+  },
+  {
+    "mapperVersion": "1",
+    "endpoint": "draft_picks",
+    "url": "https://api.sleeper.app/v1/draft/257270643320426496/picks",
+    "fetchedAt": "2026-08-01T00:00:00.000Z",
+    "raw": [
+      {
+        "player_id": "2391",
+        "picked_by": "234343434",
+        "roster_id": "1",
+        "round": 5,
+        "draft_slot": 5,
+        "pick_no": 1,
+        "metadata": {
+          "team": "ARI",
+          "position": "RB",
+          "first_name": "David",
+          "last_name": "Johnson"
+        },
+        "is_keeper": null,
+        "draft_id": "257270643320426496"
+      }
+    ]
+  },
+  {
+    "mapperVersion": "1",
+    "endpoint": "players",
+    "url": "https://api.sleeper.app/v1/players/nfl?position=QB&active=true",
+    "fetchedAt": "2026-08-01T00:00:00.000Z",
+    "raw": {
+      "3086": {
+        "player_id": "3086",
+        "first_name": "Tom",
+        "last_name": "Brady",
+        "full_name": null,
+        "position": "QB",
+        "team": "NE",
+        "status": "Active"
+      }
+    }
+  }
+]

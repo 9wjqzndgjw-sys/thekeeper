@@ -1,12 +1,17 @@
 import { describe, expect, it } from 'vitest';
+import documentedApiPayloads from './fixtures/v1/documented-api-payloads.json';
 import {
+  createSleeperFixtureFetch,
   createSleeperAdapter,
   DEFAULT_SLEEPER_ADAPTER_CONFIG,
+  SLEEPER_MAPPER_VERSION,
   SleeperHttpError,
   SleeperValidationError,
   type SleeperFetch,
   type SleeperRawSnapshot,
 } from './index.js';
+
+const documentedFixtures = documentedApiPayloads as SleeperRawSnapshot[];
 
 describe('sleeper-adapter config', () => {
   it('exposes a default config within Sleeper rate guidance', () => {
@@ -15,6 +20,40 @@ describe('sleeper-adapter config', () => {
 
   it('rejects a rate limit above the documented guidance', () => {
     expect(() => createSleeperAdapter({ requestsPerMinuteLimit: 1001 })).toThrow(/1000/);
+  });
+
+  it('rejects invalid endpoint cache lifetimes', () => {
+    expect(() => createSleeperAdapter({ cacheTtlMsByEndpoint: { players: -1 } })).toThrow(
+      /players/,
+    );
+  });
+});
+
+describe('SleeperAdapter fixture replay', () => {
+  it('replays mapper-versioned file fixtures without network access', async () => {
+    const adapter = createSleeperAdapter({
+      cacheTtlMs: 0,
+      fetch: createSleeperFixtureFetch(documentedFixtures),
+      now: () => Date.parse('2026-08-01T00:00:00.000Z'),
+    });
+
+    const league = await adapter.getLeague('289646328504385536');
+    const picks = await adapter.getDraftPicks('257270643320426496');
+    const players = await adapter.getPlayers('nfl', { position: 'QB', active: true });
+
+    expect(league.data.sleeperLeagueId).toBe('289646328504385536');
+    expect(league.snapshot.mapperVersion).toBe(SLEEPER_MAPPER_VERSION);
+    expect(picks.data[0]?.rosterId).toBe(1);
+    expect(players.data.players[0]?.sleeperPlayerId).toBe('3086');
+    expect(players.diagnostics).toContainEqual(expect.objectContaining({ path: '["3086"].team' }));
+  });
+
+  it('rejects fixtures produced by a different mapper version', () => {
+    const fixture = documentedFixtures[0];
+    expect(fixture).toBeDefined();
+    expect(() => createSleeperFixtureFetch([{ ...fixture!, mapperVersion: 'obsolete' }])).toThrow(
+      /mapper version/,
+    );
   });
 });
 
@@ -253,6 +292,7 @@ describe('SleeperAdapter endpoint mappers', () => {
                 roster_id: 1,
                 previous_owner_id: 1,
                 owner_id: 2,
+                future_pick_field: 'ignored',
               },
             ],
             created: 1700000000000,
@@ -283,6 +323,9 @@ describe('SleeperAdapter endpoint mappers', () => {
       createdAt: 1700000000000,
       statusUpdatedAt: 1700000001000,
     });
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ path: '[0].draft_picks[0].future_pick_field' }),
+    );
   });
 
   it('normalizes player catalog records into domain players and skips unsupported positions', async () => {
@@ -295,12 +338,14 @@ describe('SleeperAdapter endpoint mappers', () => {
             last_name: 'Brady',
             full_name: null,
             position: 'QB',
+            hashtag: '#TomBrady-NFL-NE-12',
           },
           '9999': {
             player_id: '9999',
             first_name: 'Kicker',
             last_name: 'Person',
             position: 'K',
+            hashtag: '#KickerPerson-NFL-FA',
           },
         }),
       ]),
@@ -318,6 +363,12 @@ describe('SleeperAdapter endpoint mappers', () => {
       },
     ]);
     expect(result.data.skippedSleeperPlayerIds).toEqual(['9999']);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ path: '["3086"].hashtag' }),
+    );
+    expect(
+      result.diagnostics.filter((diagnostic) => diagnostic.message.includes('hashtag')),
+    ).toHaveLength(1);
   });
 });
 
@@ -343,6 +394,260 @@ describe('SleeperAdapter rate limiting', () => {
     await adapter.getUser('user-2');
 
     expect(sleeps).toEqual([1000]);
+  });
+
+  it('serializes concurrent requests through the rate limiter', async () => {
+    let now = 1_000;
+    const requestTimes: number[] = [];
+    const adapter = createSleeperAdapter({
+      requestsPerMinuteLimit: 60,
+      cacheTtlMs: 0,
+      now: () => now,
+      sleep: (ms) => {
+        now += ms;
+        return Promise.resolve();
+      },
+      fetch: async (url) => {
+        requestTimes.push(now);
+        return jsonResponse({ user_id: url.slice(url.lastIndexOf('/') + 1) });
+      },
+    });
+
+    await Promise.all([
+      adapter.getUser('user-1'),
+      adapter.getUser('user-2'),
+      adapter.getUser('user-3'),
+    ]);
+
+    expect(requestTimes).toEqual([1_000, 2_000, 3_000]);
+  });
+});
+
+describe('SleeperAdapter caching', () => {
+  it('serves a repeated request from cache without a second fetch', async () => {
+    let fetchCount = 0;
+    const fetch: SleeperFetch = async () => {
+      fetchCount += 1;
+      return jsonResponse({ user_id: 'user-1', username: 'first-fetch' });
+    };
+    const adapter = createSleeperAdapter({ fetch, cacheTtlMs: 60_000 });
+
+    const first = await adapter.getUser('user-1');
+    const second = await adapter.getUser('user-1');
+
+    expect(fetchCount).toBe(1);
+    expect(second.data).toEqual(first.data);
+  });
+
+  it('re-fetches once the cache entry expires', async () => {
+    let now = 0;
+    const adapter = createSleeperAdapter({
+      cacheTtlMs: 1_000,
+      now: () => now,
+      fetch: createMockFetch([
+        jsonResponse({ user_id: 'user-1', username: 'stale' }),
+        jsonResponse({ user_id: 'user-1', username: 'fresh' }),
+      ]),
+    });
+
+    const first = await adapter.getUser('user-1');
+    now += 1_001;
+    const second = await adapter.getUser('user-1');
+
+    expect(first.data.username).toBe('stale');
+    expect(second.data.username).toBe('fresh');
+  });
+
+  it('never caches when cacheTtlMs is 0', async () => {
+    const adapter = createSleeperAdapter({
+      cacheTtlMs: 0,
+      fetch: createMockFetch([
+        jsonResponse({ user_id: 'user-1', username: 'call-one' }),
+        jsonResponse({ user_id: 'user-1', username: 'call-two' }),
+      ]),
+    });
+
+    const first = await adapter.getUser('user-1');
+    const second = await adapter.getUser('user-1');
+
+    expect(first.data.username).toBe('call-one');
+    expect(second.data.username).toBe('call-two');
+  });
+
+  it('uses a day-scale default cache for the player catalog', async () => {
+    let now = 0;
+    let fetchCount = 0;
+    const adapter = createSleeperAdapter({
+      now: () => now,
+      fetch: async () => {
+        fetchCount += 1;
+        return jsonResponse({
+          '3086': { player_id: '3086', full_name: 'Tom Brady', position: 'QB' },
+        });
+      },
+    });
+    const playerCacheTtlMs = DEFAULT_SLEEPER_ADAPTER_CONFIG.cacheTtlMsByEndpoint.players;
+    expect(playerCacheTtlMs).toBe(24 * 60 * 60 * 1_000);
+
+    await adapter.getPlayers('nfl');
+    now += 60_000;
+    await adapter.getPlayers('nfl');
+    expect(fetchCount).toBe(1);
+
+    now = playerCacheTtlMs! + 1;
+    await adapter.getPlayers('nfl');
+    expect(fetchCount).toBe(2);
+  });
+
+  it('keeps the default draft-pick cache shorter than the polling interval', async () => {
+    let now = 0;
+    let fetchCount = 0;
+    const adapter = createSleeperAdapter({
+      now: () => now,
+      fetch: async () => {
+        fetchCount += 1;
+        return jsonResponse([]);
+      },
+    });
+
+    await adapter.getDraftPicks('draft-1');
+    now += 3_000;
+    await adapter.getDraftPicks('draft-1');
+
+    expect(DEFAULT_SLEEPER_ADAPTER_CONFIG.cacheTtlMsByEndpoint.draft_picks).toBeLessThan(3_000);
+    expect(fetchCount).toBe(2);
+  });
+
+  it('keeps the long players TTL when only the fallback cacheTtlMs is raised', async () => {
+    let now = 0;
+    let fetchCount = 0;
+    const adapter = createSleeperAdapter({
+      // Raising the general fallback must not silently drop the 24h players default
+      // and start re-downloading the ~5MB catalog every minute.
+      cacheTtlMs: 60_000,
+      now: () => now,
+      fetch: async () => {
+        fetchCount += 1;
+        return jsonResponse({});
+      },
+    });
+
+    await adapter.getPlayers('nfl');
+    now += 60 * 60 * 1_000;
+    await adapter.getPlayers('nfl');
+
+    expect(fetchCount).toBe(1);
+  });
+
+  it('still disables caching entirely when cacheTtlMs is explicitly 0', async () => {
+    let fetchCount = 0;
+    const adapter = createSleeperAdapter({
+      cacheTtlMs: 0,
+      fetch: async () => {
+        fetchCount += 1;
+        return jsonResponse({});
+      },
+    });
+
+    await adapter.getPlayers('nfl');
+    await adapter.getPlayers('nfl');
+
+    expect(fetchCount).toBe(2);
+  });
+
+  it('reports whether a response was fresh, cached, or stale', async () => {
+    let now = 0;
+    let fetchCount = 0;
+    const adapter = createSleeperAdapter({
+      cacheTtlMs: 1_000,
+      retryCount: 0,
+      now: () => now,
+      fetch: async () => {
+        fetchCount += 1;
+        if (fetchCount === 1) {
+          return jsonResponse({ user_id: 'user-1' });
+        }
+        throw new TypeError('network unavailable');
+      },
+    });
+
+    expect((await adapter.getUser('user-1')).cache).toBe('miss');
+    expect((await adapter.getUser('user-1')).cache).toBe('hit');
+    now += 1_001;
+    expect((await adapter.getUser('user-1')).cache).toBe('stale');
+  });
+
+  it('freezes returned data so a caller cannot corrupt a later cache hit', async () => {
+    const adapter = createSleeperAdapter({
+      cacheTtlMs: 60_000,
+      fetch: async () =>
+        jsonResponse([
+          { roster_id: 1, league_id: 'league-1', players: ['a'] },
+          { roster_id: 2, league_id: 'league-1', players: ['b'] },
+        ]),
+    });
+
+    const first = await adapter.getLeagueRosters('league-1');
+    expect(() => first.data.reverse()).toThrow();
+
+    const second = await adapter.getLeagueRosters('league-1');
+    expect(second.data.map((roster) => roster.rosterId)).toEqual([1, 2]);
+  });
+
+  it('evicts least-recently-used entries beyond maxCacheEntries', async () => {
+    let fetchCount = 0;
+    const adapter = createSleeperAdapter({
+      cacheTtlMs: 60_000,
+      maxCacheEntries: 2,
+      fetch: async () => {
+        fetchCount += 1;
+        return jsonResponse({ user_id: `user-${fetchCount}` });
+      },
+    });
+
+    await adapter.getUser('a');
+    await adapter.getUser('b');
+    await adapter.getUser('a'); // touch 'a' so 'b' becomes least-recently-used
+    await adapter.getUser('c'); // evicts 'b'
+    expect(fetchCount).toBe(3);
+
+    expect((await adapter.getUser('a')).cache).toBe('hit');
+    expect((await adapter.getUser('b')).cache).toBe('miss');
+    expect(fetchCount).toBe(4);
+  });
+
+  it('rejects a non-positive maxCacheEntries', () => {
+    expect(() => createSleeperAdapter({ maxCacheEntries: 0 })).toThrow(/maxCacheEntries/);
+  });
+
+  it('serves expired cached data with a warning when a transient refresh fails', async () => {
+    let now = 0;
+    let fetchCount = 0;
+    const adapter = createSleeperAdapter({
+      cacheTtlMs: 1_000,
+      retryCount: 0,
+      now: () => now,
+      fetch: async () => {
+        fetchCount += 1;
+        if (fetchCount === 1) {
+          return jsonResponse({ user_id: 'user-1', username: 'last-known-good' });
+        }
+        throw new TypeError('network unavailable');
+      },
+    });
+
+    const fresh = await adapter.getUser('user-1');
+    now += 1_001;
+    const stale = await adapter.getUser('user-1');
+
+    expect(stale.data).toEqual(fresh.data);
+    expect(stale.snapshot).toEqual(fresh.snapshot);
+    expect(stale.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: 'warning',
+        message: expect.stringContaining('serving stale cached data'),
+      }),
+    );
   });
 });
 

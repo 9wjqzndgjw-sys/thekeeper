@@ -1,12 +1,19 @@
 import { z } from 'zod';
 import type { Player, PlayerId } from '@keeper/domain';
 
+export const SLEEPER_MAPPER_VERSION = '1';
+
 export interface SleeperAdapterConfig {
   baseUrl: string;
   requestsPerMinuteLimit: number;
   timeoutMs: number;
   retryCount: number;
   retryBaseDelayMs: number;
+  /** Fallback cache lifetime for endpoints without their own entry. Set to 0 to disable caching entirely, including per-endpoint defaults. */
+  cacheTtlMs: number;
+  cacheTtlMsByEndpoint: Partial<Record<SleeperEndpoint, number>>;
+  /** Maximum cached URLs retained. Least-recently-used entries are evicted beyond this. */
+  maxCacheEntries: number;
   fetch: SleeperFetch;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
@@ -35,6 +42,7 @@ export interface SleeperDiagnostic {
 }
 
 export interface SleeperRawSnapshot {
+  mapperVersion: string;
   endpoint: SleeperEndpoint;
   url: string;
   fetchedAt: string;
@@ -43,10 +51,52 @@ export interface SleeperRawSnapshot {
 
 export type SleeperRawSnapshotSink = (snapshot: SleeperRawSnapshot) => void | Promise<void>;
 
+export function createSleeperFixtureFetch(fixtures: readonly SleeperRawSnapshot[]): SleeperFetch {
+  const remainingByUrl = new Map<string, SleeperRawSnapshot[]>();
+
+  for (const fixture of fixtures) {
+    if (fixture.mapperVersion !== SLEEPER_MAPPER_VERSION) {
+      throw new Error(
+        `Sleeper fixture mapper version ${fixture.mapperVersion} cannot be replayed by mapper version ${SLEEPER_MAPPER_VERSION}.`,
+      );
+    }
+    const remaining = remainingByUrl.get(fixture.url) ?? [];
+    remaining.push(fixture);
+    remainingByUrl.set(fixture.url, remaining);
+  }
+
+  return async (url, init) => {
+    if (init?.signal?.aborted) {
+      throw new Error(`Sleeper fixture request was aborted: ${url}`);
+    }
+
+    const remaining = remainingByUrl.get(url);
+    const fixture = remaining?.shift();
+    if (!fixture) {
+      throw new Error(`No Sleeper fixture queued for ${url}.`);
+    }
+
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => structuredClone(fixture.raw),
+    };
+  };
+}
+
+/**
+ * `miss` fetched fresh, `hit` served from a live cache entry, `stale` served from an
+ * expired entry because the refresh failed. Pair `stale` with `snapshot.fetchedAt` to
+ * decide whether the data is too old to act on.
+ */
+export type SleeperCacheStatus = 'miss' | 'hit' | 'stale';
+
 export interface SleeperAdapterResponse<T> {
   data: T;
   snapshot: SleeperRawSnapshot;
   diagnostics: SleeperDiagnostic[];
+  cache: SleeperCacheStatus;
 }
 
 export type SleeperEndpoint =
@@ -190,6 +240,12 @@ export const DEFAULT_SLEEPER_ADAPTER_CONFIG: SleeperAdapterConfig = {
   timeoutMs: 10_000,
   retryCount: 2,
   retryBaseDelayMs: 250,
+  cacheTtlMs: 5_000,
+  cacheTtlMsByEndpoint: {
+    draft_picks: 2_000,
+    players: 24 * 60 * 60 * 1_000,
+  },
+  maxCacheEntries: 256,
   fetch: defaultFetch,
   now: () => Date.now(),
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -291,58 +347,40 @@ const sleeperPlayerSchema = z.object({
 
 const sleeperPlayerCatalogSchema = z.record(z.string(), sleeperPlayerSchema);
 
-const schemaKeys = {
-  user: ['user_id', 'username', 'display_name', 'avatar', 'metadata', 'is_owner'],
-  league: [
-    'total_rosters',
-    'status',
-    'settings',
-    'scoring_settings',
-    'roster_positions',
-    'previous_league_id',
-    'name',
-    'league_id',
-    'draft_id',
-    'avatar',
-    'season',
-  ],
-  roster: ['roster_id', 'league_id', 'owner_id', 'players', 'starters', 'reserve', 'settings'],
-  draft: [
-    'draft_id',
-    'league_id',
-    'type',
-    'status',
-    'season',
-    'start_time',
-    'settings',
-    'draft_order',
-    'slot_to_roster_id',
-    'metadata',
-  ],
-  draftPick: [
-    'draft_id',
-    'pick_no',
-    'round',
-    'draft_slot',
-    'roster_id',
-    'player_id',
-    'picked_by',
-    'is_keeper',
-    'metadata',
-  ],
-  tradedPick: ['season', 'round', 'roster_id', 'previous_owner_id', 'owner_id'],
-  transaction: [
-    'transaction_id',
-    'type',
-    'status',
-    'roster_ids',
-    'adds',
-    'drops',
-    'draft_picks',
-    'created',
-    'status_updated',
-  ],
-} satisfies Record<string, string[]>;
+type UnknownFieldShape =
+  | {
+      kind: 'object';
+      keys: ReadonlySet<string>;
+      children: Readonly<Record<string, UnknownFieldShape>>;
+    }
+  | { kind: 'array'; item: UnknownFieldShape }
+  | { kind: 'record'; value: UnknownFieldShape };
+
+function objectFieldShape(
+  schema: z.ZodObject<z.ZodRawShape>,
+  children: Readonly<Record<string, UnknownFieldShape>> = {},
+): UnknownFieldShape {
+  return { kind: 'object', keys: new Set(Object.keys(schema.shape)), children };
+}
+
+function arrayFieldShape(item: UnknownFieldShape): UnknownFieldShape {
+  return { kind: 'array', item };
+}
+
+function recordFieldShape(value: UnknownFieldShape): UnknownFieldShape {
+  return { kind: 'record', value };
+}
+
+const userFieldShape = objectFieldShape(sleeperUserSchema);
+const leagueFieldShape = objectFieldShape(sleeperLeagueSchema);
+const rosterFieldShape = objectFieldShape(sleeperRosterSchema);
+const draftFieldShape = objectFieldShape(sleeperDraftSchema);
+const draftPickFieldShape = objectFieldShape(sleeperDraftPickSchema);
+const tradedPickFieldShape = objectFieldShape(sleeperTradedPickSchema);
+const transactionFieldShape = objectFieldShape(sleeperTransactionSchema, {
+  draft_picks: arrayFieldShape(tradedPickFieldShape),
+});
+const playerFieldShape = objectFieldShape(sleeperPlayerSchema);
 
 export function createSleeperAdapter(config: CreateSleeperAdapterConfig = {}): SleeperAdapter {
   const resolvedConfig = normalizeConfig(config);
@@ -354,7 +392,7 @@ export function createSleeperAdapter(config: CreateSleeperAdapterConfig = {}): S
         endpoint: 'user',
         path: `/user/${encodeURIComponent(userIdOrUsername)}`,
         schema: sleeperUserSchema,
-        schemaKeys: schemaKeys.user,
+        fieldShape: userFieldShape,
         normalize: normalizeUser,
       });
     },
@@ -365,7 +403,7 @@ export function createSleeperAdapter(config: CreateSleeperAdapterConfig = {}): S
           season,
         )}`,
         schema: z.array(sleeperLeagueSchema),
-        schemaKeys: schemaKeys.league,
+        fieldShape: arrayFieldShape(leagueFieldShape),
         normalize: (leagues) => leagues.map(normalizeLeague),
       });
     },
@@ -374,7 +412,7 @@ export function createSleeperAdapter(config: CreateSleeperAdapterConfig = {}): S
         endpoint: 'league',
         path: `/league/${encodeURIComponent(leagueId)}`,
         schema: sleeperLeagueSchema,
-        schemaKeys: schemaKeys.league,
+        fieldShape: leagueFieldShape,
         normalize: normalizeLeague,
       });
     },
@@ -383,7 +421,7 @@ export function createSleeperAdapter(config: CreateSleeperAdapterConfig = {}): S
         endpoint: 'league_rosters',
         path: `/league/${encodeURIComponent(leagueId)}/rosters`,
         schema: z.array(sleeperRosterSchema),
-        schemaKeys: schemaKeys.roster,
+        fieldShape: arrayFieldShape(rosterFieldShape),
         normalize: (rosters) => rosters.map(normalizeRoster),
       });
     },
@@ -392,7 +430,7 @@ export function createSleeperAdapter(config: CreateSleeperAdapterConfig = {}): S
         endpoint: 'league_users',
         path: `/league/${encodeURIComponent(leagueId)}/users`,
         schema: z.array(sleeperUserSchema),
-        schemaKeys: schemaKeys.user,
+        fieldShape: arrayFieldShape(userFieldShape),
         normalize: (users) => users.map(normalizeUser),
       });
     },
@@ -401,7 +439,7 @@ export function createSleeperAdapter(config: CreateSleeperAdapterConfig = {}): S
         endpoint: 'league_drafts',
         path: `/league/${encodeURIComponent(leagueId)}/drafts`,
         schema: z.array(sleeperDraftSchema),
-        schemaKeys: schemaKeys.draft,
+        fieldShape: arrayFieldShape(draftFieldShape),
         normalize: (drafts) => drafts.map(normalizeDraft),
       });
     },
@@ -410,7 +448,7 @@ export function createSleeperAdapter(config: CreateSleeperAdapterConfig = {}): S
         endpoint: 'league_transactions',
         path: `/league/${encodeURIComponent(leagueId)}/transactions/${week}`,
         schema: z.array(sleeperTransactionSchema),
-        schemaKeys: schemaKeys.transaction,
+        fieldShape: arrayFieldShape(transactionFieldShape),
         normalize: (transactions) => transactions.map(normalizeTransaction),
       });
     },
@@ -419,7 +457,7 @@ export function createSleeperAdapter(config: CreateSleeperAdapterConfig = {}): S
         endpoint: 'league_traded_picks',
         path: `/league/${encodeURIComponent(leagueId)}/traded_picks`,
         schema: z.array(sleeperTradedPickSchema),
-        schemaKeys: schemaKeys.tradedPick,
+        fieldShape: arrayFieldShape(tradedPickFieldShape),
         normalize: (tradedPicks) => tradedPicks.map(normalizeTradedPick),
       });
     },
@@ -428,7 +466,7 @@ export function createSleeperAdapter(config: CreateSleeperAdapterConfig = {}): S
         endpoint: 'draft',
         path: `/draft/${encodeURIComponent(draftId)}`,
         schema: sleeperDraftSchema,
-        schemaKeys: schemaKeys.draft,
+        fieldShape: draftFieldShape,
         normalize: normalizeDraft,
       });
     },
@@ -437,7 +475,7 @@ export function createSleeperAdapter(config: CreateSleeperAdapterConfig = {}): S
         endpoint: 'draft_picks',
         path: `/draft/${encodeURIComponent(draftId)}/picks`,
         schema: z.array(sleeperDraftPickSchema),
-        schemaKeys: schemaKeys.draftPick,
+        fieldShape: arrayFieldShape(draftPickFieldShape),
         normalize: (picks) => picks.map(normalizeDraftPick),
       });
     },
@@ -446,7 +484,7 @@ export function createSleeperAdapter(config: CreateSleeperAdapterConfig = {}): S
         endpoint: 'draft_traded_picks',
         path: `/draft/${encodeURIComponent(draftId)}/traded_picks`,
         schema: z.array(sleeperTradedPickSchema),
-        schemaKeys: schemaKeys.tradedPick,
+        fieldShape: arrayFieldShape(tradedPickFieldShape),
         normalize: (tradedPicks) => tradedPicks.map(normalizeTradedPick),
       });
     },
@@ -463,15 +501,24 @@ export function createSleeperAdapter(config: CreateSleeperAdapterConfig = {}): S
         endpoint: 'players',
         path: `/players/${encodeURIComponent(sport)}${suffix}`,
         schema: sleeperPlayerCatalogSchema,
-        schemaKeys: null,
+        fieldShape: recordFieldShape(playerFieldShape),
         normalize: normalizePlayerCatalog,
       });
     },
   };
 }
 
+interface SleeperCacheEntry {
+  expiresAt: number;
+  data: unknown;
+  snapshot: SleeperRawSnapshot;
+  diagnostics: readonly SleeperDiagnostic[];
+}
+
 class SleeperHttpClient {
   private lastRequestAt: number | null = null;
+  private rateLimitQueue: Promise<void> = Promise.resolve();
+  private readonly cache = new Map<string, SleeperCacheEntry>();
 
   constructor(private readonly config: SleeperAdapterConfig) {}
 
@@ -479,13 +526,31 @@ class SleeperHttpClient {
     endpoint: SleeperEndpoint;
     path: string;
     schema: z.ZodType<TParsed>;
-    schemaKeys: readonly string[] | null;
+    fieldShape: UnknownFieldShape;
     normalize: (parsed: TParsed) => TNormalized;
   }): Promise<SleeperAdapterResponse<TNormalized>> {
     const url = buildUrl(this.config.baseUrl, input.path);
-    const raw = await this.fetchJsonWithPolicy(url);
+
+    const cached = this.readFreshCache(url);
+    if (cached) {
+      return {
+        data: cached.data as TNormalized,
+        snapshot: cached.snapshot,
+        diagnostics: [...cached.diagnostics],
+        cache: 'hit',
+      };
+    }
+
+    let raw: unknown;
+    try {
+      raw = await this.fetchJsonWithPolicy(url);
+    } catch (error) {
+      return this.serveStaleOrThrow(url, input.endpoint, error);
+    }
+
     const fetchedAt = new Date(this.config.now()).toISOString();
     const snapshot: SleeperRawSnapshot = {
+      mapperVersion: SLEEPER_MAPPER_VERSION,
       endpoint: input.endpoint,
       url,
       fetchedAt,
@@ -493,23 +558,91 @@ class SleeperHttpClient {
     };
     await this.config.snapshotSink?.(snapshot);
 
-    const diagnostics = collectUnknownKeyDiagnostics(input.endpoint, raw, input.schemaKeys);
+    const diagnostics = collectUnknownKeyDiagnostics(input.endpoint, raw, input.fieldShape);
     const parsed = input.schema.safeParse(raw);
     if (!parsed.success) {
-      throw new SleeperValidationError(input.endpoint, parsed.error, diagnostics);
+      return this.serveStaleOrThrow(
+        url,
+        input.endpoint,
+        new SleeperValidationError(input.endpoint, parsed.error, diagnostics),
+      );
+    }
+
+    // Frozen whether or not it is cached, so a caller cannot mutate shared state on a
+    // later cache hit and cannot observe different mutability between miss and hit.
+    const data = deepFreeze(input.normalize(parsed.data));
+    deepFreeze(snapshot);
+    this.writeCache(url, input.endpoint, { data, snapshot, diagnostics });
+
+    return { data, snapshot, diagnostics: [...diagnostics], cache: 'miss' };
+  }
+
+  private readFreshCache(url: string): SleeperCacheEntry | null {
+    const entry = this.cache.get(url);
+    if (!entry || entry.expiresAt <= this.config.now()) {
+      return null;
+    }
+
+    // Re-insert so Map iteration order tracks recency for LRU eviction.
+    this.cache.delete(url);
+    this.cache.set(url, entry);
+    return entry;
+  }
+
+  private writeCache(
+    url: string,
+    endpoint: SleeperEndpoint,
+    entry: Omit<SleeperCacheEntry, 'expiresAt'>,
+  ): void {
+    const cacheTtlMs = this.cacheTtlMsFor(endpoint);
+    if (cacheTtlMs <= 0) {
+      this.cache.delete(url);
+      return;
+    }
+
+    this.cache.delete(url);
+    this.cache.set(url, { ...entry, expiresAt: this.config.now() + cacheTtlMs });
+
+    while (this.cache.size > this.config.maxCacheEntries) {
+      const oldest = this.cache.keys().next();
+      if (oldest.done) {
+        break;
+      }
+      this.cache.delete(oldest.value);
+    }
+  }
+
+  private cacheTtlMsFor(endpoint: SleeperEndpoint): number {
+    return this.config.cacheTtlMsByEndpoint[endpoint] ?? this.config.cacheTtlMs;
+  }
+
+  private serveStaleOrThrow<TNormalized>(
+    url: string,
+    endpoint: SleeperEndpoint,
+    error: unknown,
+  ): SleeperAdapterResponse<TNormalized> {
+    const stale = this.cache.get(url);
+    if (!stale || !canServeStaleFor(error)) {
+      throw error;
     }
 
     return {
-      data: input.normalize(parsed.data),
-      snapshot,
-      diagnostics,
+      data: stale.data as TNormalized,
+      snapshot: stale.snapshot,
+      diagnostics: [
+        ...stale.diagnostics,
+        {
+          level: 'warning',
+          endpoint,
+          message: `Sleeper refresh failed; serving stale cached data. ${errorMessage(error)}`,
+        },
+      ],
+      cache: 'stale',
     };
   }
 
   private async fetchJsonWithPolicy(url: string): Promise<unknown> {
-    let lastError: unknown = null;
-
-    for (let attempt = 0; attempt <= this.config.retryCount; attempt += 1) {
+    for (let attempt = 0; ; attempt += 1) {
       await this.waitForRateLimit();
 
       const controller = new AbortController();
@@ -526,7 +659,6 @@ class SleeperHttpClient {
         }
         return await response.json();
       } catch (error) {
-        lastError = error;
         if (error instanceof SleeperHttpError || attempt >= this.config.retryCount) {
           throw error;
         }
@@ -535,24 +667,24 @@ class SleeperHttpClient {
         clearTimeout(timeout);
       }
     }
-
-    throw lastError instanceof Error ? lastError : new Error(String(lastError));
   }
 
-  private async waitForRateLimit(): Promise<void> {
-    const now = this.config.now();
-    if (this.lastRequestAt === null) {
-      this.lastRequestAt = now;
-      return;
-    }
+  private waitForRateLimit(): Promise<void> {
+    const reservation = this.rateLimitQueue.then(async () => {
+      const now = this.config.now();
+      if (this.lastRequestAt !== null) {
+        const minimumIntervalMs = Math.ceil(60_000 / this.config.requestsPerMinuteLimit);
+        const elapsed = now - this.lastRequestAt;
+        if (elapsed < minimumIntervalMs) {
+          await this.config.sleep(minimumIntervalMs - elapsed);
+        }
+      }
 
-    const minimumIntervalMs = Math.ceil(60_000 / this.config.requestsPerMinuteLimit);
-    const elapsed = now - this.lastRequestAt;
-    if (elapsed < minimumIntervalMs) {
-      await this.config.sleep(minimumIntervalMs - elapsed);
-    }
+      this.lastRequestAt = this.config.now();
+    });
 
-    this.lastRequestAt = this.config.now();
+    this.rateLimitQueue = reservation.catch(() => undefined);
+    return reservation;
   }
 
   private retryDelay(attempt: number): number {
@@ -639,8 +771,8 @@ function normalizeDraft(draft: SleeperDraft): NormalizedSleeperDraft {
     type: normalizeDraftType(draft.type),
     status: normalizeDraftStatus(draft.status),
     season: draft.season ?? null,
-    rounds: numberSetting(draft.settings ?? {}, 'rounds') || null,
-    teamCount: numberSetting(draft.settings ?? {}, 'teams') || null,
+    rounds: nullableNumberSetting(draft.settings ?? {}, 'rounds'),
+    teamCount: nullableNumberSetting(draft.settings ?? {}, 'teams'),
     startTime: draft.start_time ?? null,
     draftOrder: draft.draft_order ?? {},
     slotToRosterId: normalizeSlotToRosterId(draft.slot_to_roster_id ?? {}),
@@ -739,44 +871,109 @@ function normalizeSlotToRosterId(value: Record<string, number>): Record<number, 
 }
 
 function numberSetting(settings: Record<string, unknown>, key: string): number {
+  return nullableNumberSetting(settings, key) ?? 0;
+}
+
+function nullableNumberSetting(settings: Record<string, unknown>, key: string): number | null {
   const value = settings[key];
-  return typeof value === 'number' ? value : 0;
+  return typeof value === 'number' ? value : null;
 }
 
 function collectUnknownKeyDiagnostics(
   endpoint: SleeperEndpoint,
   raw: unknown,
-  keys: readonly string[] | null,
+  shape: UnknownFieldShape,
 ): SleeperDiagnostic[] {
-  if (!keys) {
-    return [];
-  }
-
-  const allowedKeys = new Set(keys);
-  const objects = Array.isArray(raw) ? raw : [raw];
   const diagnostics: SleeperDiagnostic[] = [];
+  const reportedShapePaths = new Set<string>();
 
-  objects.forEach((item, index) => {
-    if (!isRecord(item)) {
+  visitUnknownFields(raw, shape, '', '', (key, path, shapePath) => {
+    if (reportedShapePaths.has(shapePath)) {
       return;
     }
-    for (const key of Object.keys(item)) {
-      if (!allowedKeys.has(key)) {
-        diagnostics.push({
-          level: 'warning',
-          endpoint,
-          message: `Unknown Sleeper field '${key}' was ignored.`,
-          path: Array.isArray(raw) ? `[${index}].${key}` : key,
-        });
-      }
-    }
+    reportedShapePaths.add(shapePath);
+    diagnostics.push({
+      level: 'warning',
+      endpoint,
+      message: `Unknown Sleeper field '${key}' was ignored.`,
+      path,
+    });
   });
 
   return diagnostics;
 }
 
+function visitUnknownFields(
+  value: unknown,
+  shape: UnknownFieldShape,
+  path: string,
+  shapePath: string,
+  onUnknown: (key: string, path: string, shapePath: string) => void,
+): void {
+  if (shape.kind === 'array') {
+    if (Array.isArray(value)) {
+      value.forEach((item, index) =>
+        visitUnknownFields(item, shape.item, `${path}[${index}]`, `${shapePath}[]`, onUnknown),
+      );
+    }
+    return;
+  }
+
+  if (shape.kind === 'record') {
+    if (isRecord(value)) {
+      for (const [key, item] of Object.entries(value)) {
+        visitUnknownFields(
+          item,
+          shape.value,
+          `${path}[${JSON.stringify(key)}]`,
+          `${shapePath}[]`,
+          onUnknown,
+        );
+      }
+    }
+    return;
+  }
+
+  if (!isRecord(value)) {
+    return;
+  }
+
+  for (const key of Object.keys(value)) {
+    if (!shape.keys.has(key)) {
+      onUnknown(key, path ? `${path}.${key}` : key, shapePath ? `${shapePath}.${key}` : key);
+    }
+  }
+
+  for (const [key, childShape] of Object.entries(shape.children)) {
+    if (Object.prototype.hasOwnProperty.call(value, key)) {
+      visitUnknownFields(
+        value[key],
+        childShape,
+        path ? `${path}.${key}` : key,
+        shapePath ? `${shapePath}.${key}` : key,
+        onUnknown,
+      );
+    }
+  }
+}
+
 function normalizeConfig(config: CreateSleeperAdapterConfig): SleeperAdapterConfig {
-  const resolved = { ...DEFAULT_SLEEPER_ADAPTER_CONFIG, ...config };
+  // cacheTtlMs is only a fallback for endpoints without their own entry, so raising
+  // it must not silently discard the per-endpoint defaults (notably the 24h players
+  // TTL guarding a ~5MB payload). Only an explicit 0 clears the table, so it still
+  // works as a global kill switch.
+  const cacheTtlMsByEndpoint =
+    config.cacheTtlMs === 0
+      ? { ...config.cacheTtlMsByEndpoint }
+      : {
+          ...DEFAULT_SLEEPER_ADAPTER_CONFIG.cacheTtlMsByEndpoint,
+          ...config.cacheTtlMsByEndpoint,
+        };
+  const resolved: SleeperAdapterConfig = {
+    ...DEFAULT_SLEEPER_ADAPTER_CONFIG,
+    ...config,
+    cacheTtlMsByEndpoint,
+  };
   if (!Number.isInteger(resolved.requestsPerMinuteLimit) || resolved.requestsPerMinuteLimit <= 0) {
     throw new Error('requestsPerMinuteLimit must be a positive integer.');
   }
@@ -789,6 +986,20 @@ function normalizeConfig(config: CreateSleeperAdapterConfig): SleeperAdapterConf
   if (!Number.isInteger(resolved.retryCount) || resolved.retryCount < 0) {
     throw new Error('retryCount must be a non-negative integer.');
   }
+  if (!Number.isInteger(resolved.retryBaseDelayMs) || resolved.retryBaseDelayMs < 0) {
+    throw new Error('retryBaseDelayMs must be a non-negative integer.');
+  }
+  if (!Number.isInteger(resolved.cacheTtlMs) || resolved.cacheTtlMs < 0) {
+    throw new Error('cacheTtlMs must be a non-negative integer.');
+  }
+  for (const [endpoint, cacheTtlMs] of Object.entries(resolved.cacheTtlMsByEndpoint)) {
+    if (!Number.isInteger(cacheTtlMs) || cacheTtlMs < 0) {
+      throw new Error(`cacheTtlMsByEndpoint.${endpoint} must be a non-negative integer.`);
+    }
+  }
+  if (!Number.isInteger(resolved.maxCacheEntries) || resolved.maxCacheEntries <= 0) {
+    throw new Error('maxCacheEntries must be a positive integer.');
+  }
   return resolved;
 }
 
@@ -800,8 +1011,29 @@ function shouldRetryStatus(status: number): boolean {
   return status === 408 || status === 429 || status >= 500;
 }
 
+function canServeStaleFor(error: unknown): boolean {
+  return !(error instanceof SleeperHttpError) || shouldRetryStatus(error.status);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+// Freezing before recursing also terminates on circular references.
+function deepFreeze<T>(value: T): T {
+  if (value === null || typeof value !== 'object' || Object.isFrozen(value)) {
+    return value;
+  }
+
+  Object.freeze(value);
+  for (const child of Object.values(value)) {
+    deepFreeze(child);
+  }
+  return value;
 }
 
 async function defaultFetch(
