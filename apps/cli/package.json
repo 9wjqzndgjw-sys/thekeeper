@@ -7,11 +7,14 @@
   "types": "./src/index.ts",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "start": "tsx src/index.ts"
+    "start": "tsx src/index.ts",
+    "draft": "tsx src/draft.ts"
   },
   "dependencies": {
     "@keeper/domain": "*",
+    "@keeper/draft-tracker": "*",
     "@keeper/keeper-optimizer": "*",
+    "@keeper/sleeper-adapter": "*",
     "@keeper/test-fixtures": "*",
     "@keeper/valuation": "*"
   }
