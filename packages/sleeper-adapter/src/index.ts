@@ -1050,3 +1050,5 @@ async function defaultFetch(
 }
 
 export * from './pick-ownership.js';
+export * from './franchise-mapping.js';
+export * from './import-season.js';
