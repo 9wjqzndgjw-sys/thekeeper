@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@keeper/domain": "*"
+    "@keeper/domain": "*",
+    "zod": "^4.4.3"
   }
 }
