@@ -16,11 +16,15 @@ export interface KeeperRight {
   manualOverrideReason: string | null;
 }
 
+export type KeeperDisplacementCause = 'missing_pick' | 'keeper_collision';
+
 export interface KeeperDisplacement {
   keeperRightId: KeeperRightId;
   nominalRound: number;
   resolvedRound: number;
   resolvedOverallPick: number;
+  cause: KeeperDisplacementCause;
+  causedByKeeperRightId: KeeperRightId | null;
   reason: string;
 }
 

@@ -1,3 +1,4 @@
+import { calculateOverallPick, formatDraftPick } from '@keeper/domain';
 import type {
   Draft,
   DraftId,
@@ -20,12 +21,12 @@ import type {
 
 const TEAM_COUNT = 12;
 const DRAFT_ROUNDS = 15;
-
-function overallPick(round: number, slot: number, teamCount: number): number {
-  const isOddRound = round % 2 === 1;
-  const positionInRound = isOddRound ? slot : teamCount + 1 - slot;
-  return (round - 1) * teamCount + positionInRound;
-}
+const SNAKE_DRAFT_CONFIG = {
+  orderMethod: 'snake',
+  teamCount: TEAM_COUNT,
+  rounds: DRAFT_ROUNDS,
+  thirdRoundReversal: false,
+} as const;
 
 export const leagueId = 'league-synthetic' as LeagueId;
 export const seasonId = 'season-synthetic-2026' as SeasonId;
@@ -115,7 +116,7 @@ export const draftPickAssets: DraftPickAsset[] = franchises.flatMap((franchise, 
       originalFranchiseId: franchise.id,
       currentFranchiseId: franchise.id,
       slot,
-      overallPick: overallPick(round, slot, TEAM_COUNT),
+      overallPick: calculateOverallPick(SNAKE_DRAFT_CONFIG, round, slot),
       ownershipConfidence: 'confirmed',
     };
     return asset;
@@ -224,5 +225,103 @@ export function createSyntheticLeagueSnapshot(): LeagueStateSnapshot {
     userFranchiseId,
     evaluatedAt: '2026-07-30T00:00:00.000Z',
     assumptions: {},
+  };
+}
+
+const knownScenarioPickSlots = [
+  { round: 1, slot: 5 },
+  { round: 2, slot: 8 },
+  { round: 3, slot: 5 },
+  { round: 4, slot: 8 },
+  { round: 6, slot: 8 },
+  { round: 7, slot: 5 },
+  { round: 9, slot: 5 },
+  { round: 10, slot: 8 },
+  { round: 11, slot: 5 },
+  { round: 12, slot: 8 },
+  { round: 13, slot: 5 },
+  { round: 14, slot: 8 },
+  { round: 15, slot: 5 },
+] as const;
+
+export const knownUserScenarioPickInventory: DraftPickAsset[] = knownScenarioPickSlots.map(
+  ({ round, slot }) => ({
+    id: `pick-known-${formatDraftPick(round, slot)}` as DraftPickAssetId,
+    seasonId,
+    round,
+    originalFranchiseId: userFranchiseId,
+    currentFranchiseId: userFranchiseId,
+    slot,
+    overallPick: calculateOverallPick(SNAKE_DRAFT_CONFIG, round, slot),
+    ownershipConfidence: 'confirmed',
+  }),
+);
+
+export const knownScenarioPlayers: Player[] = [
+  {
+    id: 'player-jayden-daniels' as PlayerId,
+    fullName: 'Jayden Daniels',
+    position: 'QB',
+    sleeperPlayerId: null,
+  },
+  {
+    id: 'player-trey-mcbride' as PlayerId,
+    fullName: 'Trey McBride',
+    position: 'TE',
+    sleeperPlayerId: null,
+  },
+  {
+    id: 'player-caleb-williams' as PlayerId,
+    fullName: 'Caleb Williams',
+    position: 'QB',
+    sleeperPlayerId: null,
+  },
+];
+
+export const knownScenarioKeeperRights: KeeperRight[] = [
+  {
+    id: 'keeper-jayden-daniels-r5' as KeeperRightId,
+    seasonId,
+    playerId: 'player-jayden-daniels' as PlayerId,
+    franchiseId: userFranchiseId,
+    sourceType: 'kept',
+    nominalRound: 5,
+    effectiveOverallPick: null,
+    confidence: 'confirmed',
+    manualOverrideReason: null,
+  },
+  {
+    id: 'keeper-trey-mcbride-r7' as KeeperRightId,
+    seasonId,
+    playerId: 'player-trey-mcbride' as PlayerId,
+    franchiseId: userFranchiseId,
+    sourceType: 'drafted',
+    nominalRound: 7,
+    effectiveOverallPick: null,
+    confidence: 'confirmed',
+    manualOverrideReason: null,
+  },
+  {
+    id: 'keeper-caleb-williams-r11' as KeeperRightId,
+    seasonId,
+    playerId: 'player-caleb-williams' as PlayerId,
+    franchiseId: userFranchiseId,
+    sourceType: 'drafted',
+    nominalRound: 11,
+    effectiveOverallPick: null,
+    confidence: 'confirmed',
+    manualOverrideReason: null,
+  },
+];
+
+export function createKnownUserKeeperScenario(): {
+  franchiseId: FranchiseId;
+  keeperRights: KeeperRight[];
+  pickInventory: DraftPickAsset[];
+} {
+  return {
+    franchiseId: userFranchiseId,
+    keeperRights: knownScenarioKeeperRights,
+    pickInventory: knownUserScenarioPickInventory,
   };
 }
