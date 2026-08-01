@@ -346,6 +346,12 @@ describe('optimizeKeeperCombinations', () => {
         consumedPickValue: 60,
       }),
     );
+
+    // win_now ignores pick cost entirely (raw retained IV), so it must differ
+    // from safest (KSV) even though no caller supplies a keeper-slot cost here.
+    expect(jaydenOnly?.modeScores.win_now).toBe(100);
+    expect(jaydenOnly?.modeScores.safest).toBe(40);
+    expect(jaydenOnly?.modeScores.win_now).not.toBe(jaydenOnly?.modeScores.safest);
   });
 
   it('throws clearly when a selected keeper cannot be matched to player metadata', () => {

@@ -501,7 +501,13 @@ function buildModeScores(input: CombinationModeScoreInput): Record<KeeperOptimiz
   return {
     expected: input.teamContextValue,
     safest: input.keeperSurplusValue,
-    win_now: input.retainedIntrinsicValue - input.consumedPickValue,
+    // Win-now favors maximum current-season production and deliberately ignores
+    // pick cost: a contender doesn't care what a keeper "cost" in draft-value
+    // terms, only how many points it adds right now. Reusing KSV's shape here
+    // (retainedIntrinsicValue - consumedPickValue) would make this mode
+    // numerically identical to `safest` whenever keeperSlotOpportunityCost is
+    // unset, which is every current caller.
+    win_now: input.retainedIntrinsicValue,
     future: input.teamContextValue + input.futureKeeperOptionValue,
   };
 }
