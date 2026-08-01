@@ -797,3 +797,5 @@ function assertNonNegativeInteger(name: string, value: number): void {
     throw new Error(`${name} must be a non-negative integer; received ${value}.`);
   }
 }
+
+export * from './release-vs-redraft.js';
