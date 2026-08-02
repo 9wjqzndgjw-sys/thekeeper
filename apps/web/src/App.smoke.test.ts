@@ -1,15 +1,22 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { App } from './App.js';
+import type { LeagueStateSnapshot, Player, PlayerId } from '@keeper/domain';
+import { createSyntheticLeagueSnapshot } from '@keeper/test-fixtures';
+import { Dashboard } from './App.js';
+import { createAppContext, createFixtureAppContext } from './app-state.js';
 
 /**
  * Renders the real component tree to markup. Server rendering skips effects, so this does
- * not exercise polling, but it does prove every panel builds its view model and renders
- * without throwing -- which a passing `vite build` alone does not show.
+ * not exercise polling or the database read, but it does prove every panel builds its view
+ * model and renders without throwing -- which a passing `vite build` alone does not show.
+ *
+ * The fixture context is used deliberately: the dashboard takes an assembled context, so it
+ * can be checked without a network or credentials.
  */
-describe('App', () => {
-  const markup = renderToStaticMarkup(createElement(App));
+describe('Dashboard', () => {
+  const context = createFixtureAppContext();
+  const markup = renderToStaticMarkup(createElement(Dashboard, { context }));
 
   it('renders each required panel', () => {
     for (const heading of ['Setup', 'Pick horizon', 'Recommendation', 'Keeper combinations']) {
@@ -38,4 +45,106 @@ describe('App', () => {
     expect(markup).toContain('Your next pick');
     expect(markup).toContain('Team 1');
   });
+
+  it('says plainly that this is not a real league', () => {
+    // A synthetic board is indistinguishable from a real one at a glance, and acting on the
+    // wrong one is the whole risk.
+    expect(markup).toContain('Demonstration data');
+    expect(markup).toContain('not your league');
+  });
+
+  it('shows the replacement levels every value on the page is measured against', () => {
+    expect(markup).toContain('Replacement level');
+  });
 });
+
+describe('createAppContext', () => {
+  it('populates a replacement level for every position, never an empty map', () => {
+    // The dashboard used to hand the optimizer `{}`, which values every player at his full
+    // projection: in a one-quarterback league that alone makes quarterbacks look like the
+    // best keepers on the board. The fixture pool is only three players against a twelve
+    // team league, so the levels themselves are legitimately zero -- what matters here is
+    // that each position was actually computed.
+    const levels = createFixtureAppContext().replacementLevels;
+
+    for (const position of ['QB', 'RB', 'WR', 'TE', 'DEF'] as const) {
+      expect(levels[position]).toBeTypeOf('number');
+    }
+  });
+
+  it('sets replacement above zero once the pool is deep enough to have one', () => {
+    const context = createAppContext({
+      snapshot: deepPoolSnapshot(),
+      players: deepPoolPlayers(),
+      source: 'fixture',
+    });
+
+    expect(context.replacementLevels.QB!).toBeGreaterThan(0);
+    expect(context.replacementLevels.RB!).toBeGreaterThan(0);
+    // A quarterback projecting 400 in a one-QB league is worth his distance above the best
+    // startable alternative, not his whole total.
+    expect(context.replacementLevels.QB!).toBeGreaterThan(context.replacementLevels.RB!);
+  });
+
+  it('builds a pick value curve that never rises with a later pick', () => {
+    // A curve built from ADP ordering is not monotonic, which prices some early picks below
+    // later ones and silently inverts the cost of keeping a player.
+    const context = createAppContext({
+      snapshot: deepPoolSnapshot(),
+      players: deepPoolPlayers(),
+      source: 'fixture',
+    });
+
+    const costs = [1, 5, 10, 25, 50, 100].map((pick) =>
+      context.pickValueCurve.getValueForPick(pick),
+    );
+    for (let index = 1; index < costs.length; index += 1) {
+      expect(costs[index]!).toBeLessThanOrEqual(costs[index - 1]!);
+    }
+  });
+});
+
+/** A pool deep enough for a twelve team league to leave someone unrostered. */
+function deepPoolPlayers(): Player[] {
+  const build = (position: Player['position'], count: number): Player[] =>
+    Array.from({ length: count }, (_, index) => ({
+      id: `${position}-${index}` as PlayerId,
+      fullName: `${position} ${index}`,
+      position,
+      sleeperPlayerId: null,
+    }));
+
+  return [
+    ...build('QB', 40),
+    ...build('RB', 90),
+    ...build('WR', 110),
+    ...build('TE', 60),
+    ...build('DEF', 32),
+  ];
+}
+
+function deepPoolSnapshot(): LeagueStateSnapshot {
+  const snapshot = createSyntheticLeagueSnapshot();
+  const basePoints: Record<Player['position'], number> = {
+    QB: 400,
+    RB: 320,
+    WR: 300,
+    TE: 215,
+    DEF: 120,
+  };
+
+  return {
+    ...snapshot,
+    keeperRights: [],
+    playerSeasons: deepPoolPlayers().map((player, index) => ({
+      playerId: player.id,
+      seasonId: snapshot.season.id,
+      nflTeam: null,
+      age: null,
+      role: null,
+      injuryStatus: null,
+      projectedPoints: Math.max(1, basePoints[player.position] - (index % 120) * 2),
+      actualPoints: null,
+    })),
+  };
+}

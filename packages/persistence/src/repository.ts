@@ -23,6 +23,32 @@ export interface LeagueSeasonRecord {
   draftRounds: number;
   scoringSettings: Record<string, unknown>;
   lineup: Record<string, unknown>;
+  rules: Record<string, unknown>;
+}
+
+/** A season row as read back, with the jsonb columns still opaque. */
+export interface StoredLeagueSeason {
+  seasonId: SeasonId;
+  leagueId: LeagueId;
+  leagueName: string;
+  rulesVersion: string;
+  seasonYear: number;
+  sleeperLeagueId: string;
+  previousSleeperLeagueId: string | null;
+  status: 'pre_draft' | 'drafting' | 'in_season' | 'complete';
+  sleeperDraftId: string | null;
+  teamCount: number;
+  draftRounds: number;
+  scoringSettings: Record<string, unknown>;
+  lineup: Record<string, unknown>;
+  rules: Record<string, unknown>;
+}
+
+export interface PlayerSeasonRecord {
+  seasonId: SeasonId;
+  playerId: string;
+  projectedPoints: number;
+  projectionSource: string;
 }
 
 export interface FranchiseSeasonRecord {
@@ -113,11 +139,108 @@ export class KeeperRepository {
             draft_rounds: record.draftRounds,
             scoring_settings: record.scoringSettings,
             lineup: record.lineup,
+            rules: record.rules,
           },
           { onConflict: 'id' },
         )
       ).error,
     );
+  }
+
+  async readLeagueSeason(seasonId: SeasonId): Promise<StoredLeagueSeason | null> {
+    const { data, error } = await this.client
+      .from('league_seasons')
+      .select(
+        'id, league_id, season_year, sleeper_league_id, previous_sleeper_league_id, status, ' +
+          'sleeper_draft_id, team_count, draft_rounds, scoring_settings, lineup, rules, ' +
+          'leagues(name, rules_version)',
+      )
+      .eq('id', seasonId)
+      .maybeSingle();
+    unwrap('read league season', error);
+
+    if (!data) {
+      return null;
+    }
+    // The untyped client cannot narrow a row that carries an embedded join, so the shape is
+    // asserted here and every field is coerced below rather than trusted.
+    const row = data as unknown as Record<string, unknown> & {
+      leagues: { name: string; rules_version: string } | null;
+    };
+    const league = row.leagues;
+
+    return {
+      seasonId: String(row.id) as SeasonId,
+      leagueId: String(row.league_id) as LeagueId,
+      leagueName: league?.name ?? '',
+      rulesVersion: league?.rules_version ?? '',
+      seasonYear: Number(row.season_year),
+      sleeperLeagueId: String(row.sleeper_league_id),
+      previousSleeperLeagueId: (row.previous_sleeper_league_id as string | null) ?? null,
+      status: row.status as StoredLeagueSeason['status'],
+      sleeperDraftId: (row.sleeper_draft_id as string | null) ?? null,
+      teamCount: Number(row.team_count),
+      draftRounds: Number(row.draft_rounds),
+      scoringSettings: (row.scoring_settings ?? {}) as Record<string, unknown>,
+      lineup: (row.lineup ?? {}) as Record<string, unknown>,
+      rules: (row.rules ?? {}) as Record<string, unknown>,
+    };
+  }
+
+  /**
+   * Projections scored under this league's settings. Batched like the catalog, since a
+   * full season covers hundreds of players.
+   */
+  async savePlayerSeasons(
+    records: readonly PlayerSeasonRecord[],
+    batchSize = 500,
+  ): Promise<number> {
+    for (let start = 0; start < records.length; start += batchSize) {
+      const batch = records.slice(start, start + batchSize);
+      unwrap(
+        `player_seasons [${start}-${start + batch.length}]`,
+        (
+          await this.client.from('player_seasons').upsert(
+            batch.map((record) => ({
+              season_id: record.seasonId,
+              player_id: record.playerId,
+              projected_points: record.projectedPoints,
+              projection_source: record.projectionSource,
+            })),
+            { onConflict: 'season_id,player_id' },
+          )
+        ).error,
+      );
+    }
+    return records.length;
+  }
+
+  /** Projected points for a season, keyed by player id, paged past PostgREST's row cap. */
+  async readPlayerSeasons(seasonId: SeasonId, pageSize = 1000): Promise<PlayerSeasonRecord[]> {
+    const records: PlayerSeasonRecord[] = [];
+
+    for (let from = 0; ; from += pageSize) {
+      const { data, error } = await this.client
+        .from('player_seasons')
+        .select('season_id, player_id, projected_points, projection_source')
+        .eq('season_id', seasonId)
+        .order('player_id')
+        .range(from, from + pageSize - 1);
+      unwrap('read player seasons', error);
+
+      const page = data ?? [];
+      records.push(
+        ...page.map((row) => ({
+          seasonId: String(row.season_id) as SeasonId,
+          playerId: String(row.player_id),
+          projectedPoints: Number(row.projected_points ?? 0),
+          projectionSource: String(row.projection_source ?? ''),
+        })),
+      );
+      if (page.length < pageSize) {
+        return records;
+      }
+    }
   }
 
   async saveFranchises(

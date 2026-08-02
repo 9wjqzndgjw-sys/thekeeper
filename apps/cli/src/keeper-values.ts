@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import type { FranchiseId, SeasonId } from '@keeper/domain';
 import { createServiceClientFromEnv, KeeperRepository } from '@keeper/persistence';
-import { loadProjections } from '@keeper/projections';
+import { loadProjections, matchProjectionsToCatalog } from '@keeper/projections';
 import { resolveKeeperCombination } from '@keeper/keeper-optimizer';
 import {
   computeIntrinsicValue,
@@ -53,48 +53,19 @@ const projections = loadProjections({
   seasonId,
 });
 
-/**
- * Punctuation and case are dropped so Ja'Marr and JaMarr are the same player, and a
- * generational suffix is removed because projection sources carry it while Sleeper often
- * does not: "Kenneth Walker III" and "Kenneth Walker" are one player.
- */
-function normalizeName(name: string): string {
-  return name
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .replace(/\b(jr|sr|ii|iii|iv|v)\b/g, '')
-    .replace(/[^a-z]/g, '');
-}
-
-const projectedByKey = new Map<string, number>();
 const projectedById = new Map<string, number>(
   projections.playerSeasons.map((season) => [String(season.playerId), season.projectedPoints ?? 0]),
 );
-for (const player of projections.players) {
-  const key = `${player.position}:${normalizeName(player.fullName)}`;
-  projectedByKey.set(key, projectedById.get(String(player.id)) ?? 0);
-}
 
-// Match on position plus normalized name: the projection exports carry no Sleeper ids.
-const pointsBySleeperId = new Map<string, number>();
-for (const player of catalog) {
-  if (!player.sleeperPlayerId) {
-    continue;
-  }
-  const key = `${player.position}:${normalizeName(player.fullName)}`;
-  const points = projectedByKey.get(key);
-  if (points !== undefined) {
-    pointsBySleeperId.set(player.sleeperPlayerId, points);
-  }
-}
-
-const positionBySleeperId = new Map(
-  catalog.filter((p) => p.sleeperPlayerId).map((p) => [p.sleeperPlayerId!, p.position]),
-);
-const nameBySleeperId = new Map(
-  catalog.filter((p) => p.sleeperPlayerId).map((p) => [p.sleeperPlayerId!, p.fullName]),
-);
+// Shared with the `project` command so the two cannot disagree about who a projection is.
+const { pointsBySleeperId, positionBySleeperId, nameBySleeperId } = matchProjectionsToCatalog({
+  catalog,
+  projections: projections.players.map((player) => ({
+    fullName: player.fullName,
+    position: player.position,
+    projectedPoints: projectedById.get(String(player.id)) ?? 0,
+  })),
+});
 
 const declaredIds = new Set(keeperRights.map((right) => String(right.playerId)));
 const unmatchedKeepers = [...declaredIds].filter((id) => !pointsBySleeperId.has(id));

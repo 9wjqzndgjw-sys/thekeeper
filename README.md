@@ -54,22 +54,54 @@ HTTP, databases, or UI state.
 
 ## Running it
 
+Create `.env.local` at the repository root. It is git-ignored, and a league id identifies a
+real group of people even though it is not itself a secret.
+
+```bash
+SLEEPER_LEAGUE_ID=<numeric league id>
+
+# Supabase. The anon key is published to every visitor by design -- row level security is
+# what protects the data. The service-role key bypasses RLS entirely and must stay local.
+VITE_SUPABASE_URL=https://<project>.supabase.co
+VITE_SUPABASE_ANON_KEY=<anon key>
+SUPABASE_SERVICE_ROLE_KEY=<service role key>
+
+# Which season the dashboard displays.
+VITE_KEEPER_SEASON_ID=season:<numeric league id>
+
+# Projection exports, rescored under this league's settings before anything uses them.
+KEEPER_SKILL_PROJECTIONS_CSV=<path to skill positions csv>
+KEEPER_DEFENSE_PROJECTIONS_CSV=<path to defence csv>
+```
+
+Then, in order — each step depends on the one above it:
+
 ```bash
 npm install
 
-# Ranked draft board from projection exports, rescored for this league
+# 1. Pull the Sleeper player catalog (~5MB; Sleeper asks for at most one fetch per day)
+npm run catalog -w @keeper/cli
+
+# 2. Import the league: franchises, pick ownership, traded picks, declared keepers, rules
+npm run sync -w @keeper/cli
+
+# 3. Score the projection exports and store them, so the browser can read them too
+npm run project -w @keeper/cli
+```
+
+With that in place:
+
+```bash
+# Every declared keeper in the league, priced against the exact pick it consumes
+npm run keeper-values -w @keeper/cli
+
+# Ranked draft board straight from projection exports, no database needed
 npm run board -w @keeper/cli -- <skill.csv> [defense.csv] --top=40
-
-# Import a live league: franchises, pick ownership, traded picks
-npm run import -w @keeper/cli
-
-# Reconstruct declared keepers and what they cost
-npm run keepers -w @keeper/cli
 
 # Replay a scripted draft through the live tracker
 npm run draft -w @keeper/cli
 
-# Dashboard
+# Dashboard, reading the same league from the database
 npm run dev -w @keeper/web
 ```
 

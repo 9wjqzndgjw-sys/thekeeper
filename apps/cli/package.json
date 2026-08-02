@@ -14,6 +14,7 @@
     "keepers": "tsx src/keepers.ts",
     "sync": "tsx src/sync.ts",
     "catalog": "tsx src/catalog.ts",
+    "project": "tsx src/project.ts",
     "keeper-values": "tsx src/keeper-values.ts"
   },
   "dependencies": {

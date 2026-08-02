@@ -1,8 +1,63 @@
-import type { LeagueStateSnapshot } from '@keeper/domain';
+import type { FranchiseId, LeagueStateSnapshot, Position } from '@keeper/domain';
 import type { KeeperOptimizationResult } from '@keeper/keeper-optimizer';
+import type { ReplacementLevels } from '@keeper/valuation';
+import type { AppContext } from '../app-state.js';
 import type { BoardViewModel } from '../view-models/boards.js';
 import type { PickHorizon } from '../view-models/pick-horizon.js';
 import type { SyncStatusViewModel } from '../view-models/sync-status.js';
+
+const POSITIONS: Position[] = ['QB', 'RB', 'WR', 'TE', 'DEF'];
+
+/**
+ * Says where these numbers came from, and what is known to be missing from them.
+ *
+ * Sits at the top because the difference between a real league and demonstration data is
+ * the single most important thing on the page: everything below looks equally authoritative
+ * either way.
+ */
+export function DataSourcePanel({
+  context,
+  franchiseId,
+  onFranchiseChange,
+}: {
+  context: AppContext;
+  franchiseId: FranchiseId;
+  onFranchiseChange: (franchiseId: FranchiseId) => void;
+}) {
+  const isFixture = context.source === 'fixture';
+  return (
+    <section className={`panel ${isFixture ? 'tone-warning' : 'tone-ok'}`}>
+      <h2>{isFixture ? 'Demonstration data' : context.snapshot.league.name}</h2>
+      <p className="muted">
+        {isFixture
+          ? 'Synthetic league. Nothing here reflects a real roster.'
+          : `${context.players.length} projected players · ${context.snapshot.keeperRights.length} declared keeper(s) · ${context.snapshot.franchises.length} franchises`}
+      </p>
+
+      {/* Recommendations are specific to one team's keepers and one team's picks, so which
+          team is being viewed has to be visible rather than implied. */}
+      <label className="franchise-picker">
+        Viewing as{' '}
+        <select
+          value={franchiseId}
+          onChange={(event) => onFranchiseChange(event.target.value as FranchiseId)}
+        >
+          {context.snapshot.franchises.map((franchise) => (
+            <option key={franchise.id} value={franchise.id}>
+              {franchise.displayName}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      {context.caveats.map((caveat) => (
+        <p key={caveat} className="warning">
+          {caveat}
+        </p>
+      ))}
+    </section>
+  );
+}
 
 export function SyncStatusPanel({ status }: { status: SyncStatusViewModel }) {
   return (
@@ -22,7 +77,13 @@ export function SyncStatusPanel({ status }: { status: SyncStatusViewModel }) {
   );
 }
 
-export function SetupPanel({ snapshot }: { snapshot: LeagueStateSnapshot }) {
+export function SetupPanel({
+  snapshot,
+  replacementLevels,
+}: {
+  snapshot: LeagueStateSnapshot;
+  replacementLevels: ReplacementLevels;
+}) {
   const { league, season } = snapshot;
   return (
     <section className="panel">
@@ -44,6 +105,20 @@ export function SetupPanel({ snapshot }: { snapshot: LeagueStateSnapshot }) {
         <dd>{league.rules.undraftedKeeperRound}</dd>
         <dt>Pick inventory</dt>
         <dd>{snapshot.pickInventory.length} assets</dd>
+        <dt>Lineup</dt>
+        <dd>
+          {league.lineup.qb}QB {league.lineup.rb}RB {league.lineup.wr}WR {league.lineup.te}TE{' '}
+          {league.lineup.flex}FLEX {league.lineup.def}DEF · {league.lineup.bench} bench
+        </dd>
+        {/* Every value on this page is a distance above these lines, so they are shown
+            rather than buried: a replacement level that looks wrong explains a board that
+            looks wrong. */}
+        <dt>Replacement level</dt>
+        <dd>
+          {POSITIONS.map(
+            (position) => `${position} ${formatNumber(replacementLevels[position] ?? 0)}`,
+          ).join(' · ')}
+        </dd>
         <dt>Rules version</dt>
         <dd>{league.rulesVersion}</dd>
       </dl>

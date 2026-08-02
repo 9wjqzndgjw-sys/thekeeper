@@ -1,8 +1,11 @@
 import {
   buildFranchiseMap,
   createSleeperAdapter,
+  deriveLeagueRules,
+  deriveLineupSettings,
   importSeasonDraftState,
   reconstructKeeperRights,
+  RECORDED_LEAGUE_POLICY,
   type SleeperRawSnapshot,
 } from '@keeper/sleeper-adapter';
 import { createServiceClientFromEnv, KeeperRepository } from '@keeper/persistence';
@@ -80,6 +83,31 @@ if (priorLeagueId) {
   }
 }
 
+// Lineup and rules are read from the league payload rather than the checked-in constants,
+// so the stored season describes the league as Sleeper actually has it configured.
+const teamCount = imported.orderConfig?.teamCount ?? league.data.totalRosters;
+const draftRounds = imported.orderConfig?.rounds ?? 15;
+const derivedLineup = deriveLineupSettings(league.data.rosterPositions);
+const lineup =
+  derivedLineup.qb + derivedLineup.rb + derivedLineup.wr > 0 ? derivedLineup : LEAGUE_LINEUP;
+// Reversal comes from the draft the importer already read, not from the league payload,
+// which carries no such field. `orderConfig.orderMethod` is deliberately not passed through:
+// it says whether the draft snakes or runs linear, a different question from how the order
+// is decided.
+const { rules, assumedFromPolicy } = deriveLeagueRules({
+  settings: league.data.settings,
+  policy: RECORDED_LEAGUE_POLICY,
+  teamCount,
+  draftRounds,
+  thirdRoundReversal: imported.orderConfig?.thirdRoundReversal,
+});
+
+if (assumedFromPolicy.length > 0) {
+  console.warn(
+    `\n  Sleeper did not state: ${assumedFromPolicy.join(', ')}. Recorded league policy was used.`,
+  );
+}
+
 console.log('Persisting...');
 
 const snapshotCount = await repository.saveRawSnapshots(
@@ -102,10 +130,11 @@ await repository.saveLeagueSeason({
   previousSleeperLeagueId: league.data.previousSleeperLeagueId,
   status: league.data.status,
   sleeperDraftId: league.data.draftId,
-  teamCount: imported.orderConfig?.teamCount ?? league.data.totalRosters,
-  draftRounds: imported.orderConfig?.rounds ?? 15,
+  teamCount,
+  draftRounds,
   scoringSettings: league.data.scoringSettings as Record<string, unknown>,
-  lineup: LEAGUE_LINEUP as unknown as Record<string, unknown>,
+  lineup: lineup as unknown as Record<string, unknown>,
+  rules: rules as unknown as Record<string, unknown>,
 });
 
 const franchiseCount = await repository.saveFranchises(
