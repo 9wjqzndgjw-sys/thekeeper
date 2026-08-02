@@ -11,7 +11,8 @@
     "draft": "tsx src/draft.ts",
     "board": "tsx src/board.ts",
     "import": "tsx src/import-league.ts",
-    "keepers": "tsx src/keepers.ts"
+    "keepers": "tsx src/keepers.ts",
+    "sync": "tsx src/sync.ts"
   },
   "dependencies": {
     "@keeper/domain": "*",
@@ -20,6 +21,7 @@
     "@keeper/sleeper-adapter": "*",
     "@keeper/test-fixtures": "*",
     "@keeper/valuation": "*",
-    "@keeper/projections": "*"
+    "@keeper/projections": "*",
+    "@keeper/persistence": "*"
   }
 }
