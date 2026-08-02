@@ -122,21 +122,34 @@ const franchiseCount = await repository.saveFranchises(
   })),
 );
 
-// Keeper rights reference players, so those rows must exist first.
+// Keeper rights reference players, so those rows must exist first. Identity comes from
+// the stored catalog rather than being invented here: prior-draft metadata carries a name
+// but no position, and guessing one would put a real player at the wrong position.
+const keeperPlayerIds = [...new Set(keeperRights.map((right) => String(right.playerId)))];
+const knownPlayers = await repository.readPlayersBySleeperId(keeperPlayerIds);
+const missingPlayerIds = keeperPlayerIds.filter((id) => !knownPlayers.has(id));
+
+if (missingPlayerIds.length > 0) {
+  console.warn(
+    `\n  ${missingPlayerIds.length} keeper(s) are not in the player catalog: ${missingPlayerIds.join(', ')}`,
+  );
+  console.warn('  Run "npm run catalog -w @keeper/cli" to refresh it, then sync again.');
+}
+
+// Only players the catalog already knows are written; the rest are reported above rather
+// than persisted with a placeholder position that would silently misprice them.
 const playerCount = await repository.savePlayers(
-  [...new Set(keeperRights.map((right) => String(right.playerId)))].map((sleeperPlayerId) => ({
-    id: sleeperPlayerId,
-    fullName: playerNames[sleeperPlayerId] ?? `Sleeper player ${sleeperPlayerId}`,
-    // Position is not in the draft metadata this path reads; the player catalog fills it in.
-    position: 'RB',
-    sleeperPlayerId,
-  })),
+  keeperPlayerIds
+    .map((sleeperPlayerId) => knownPlayers.get(sleeperPlayerId))
+    .filter((player): player is NonNullable<typeof player> => player !== undefined),
 );
 
+const persistableRights = keeperRights.filter((right) => knownPlayers.has(String(right.playerId)));
+
 const pickCount = await repository.savePickInventory(imported.pickInventory);
-const rightCount = await repository.saveKeeperRights(keeperRights);
+const rightCount = await repository.saveKeeperRights(persistableRights);
 const decisionCount = await repository.saveKeeperDecisions(
-  keeperRights.map((right) => ({
+  persistableRights.map((right) => ({
     seasonId,
     franchiseId: String(right.franchiseId),
     playerId: String(right.playerId),
@@ -150,7 +163,7 @@ const decisionCount = await repository.saveKeeperDecisions(
 console.log('\nWritten');
 console.log(`  raw snapshots     ${snapshotCount}`);
 console.log(`  franchises        ${franchiseCount}`);
-console.log(`  players           ${playerCount}`);
+console.log(`  players           ${playerCount} (from catalog)`);
 console.log(`  pick assets       ${pickCount}`);
 console.log(`  keeper rights     ${rightCount}`);
 console.log(`  keeper decisions  ${decisionCount}`);

@@ -161,25 +161,59 @@ export class KeeperRepository {
     return records.length;
   }
 
-  async savePlayers(players: readonly PlayerRecord[]): Promise<number> {
-    if (players.length === 0) {
-      return 0;
+  /**
+   * Batched because the full Sleeper catalog runs to thousands of rows and PostgREST will
+   * reject a single payload that large.
+   */
+  async savePlayers(players: readonly PlayerRecord[], batchSize = 500): Promise<number> {
+    for (let start = 0; start < players.length; start += batchSize) {
+      const batch = players.slice(start, start + batchSize);
+      unwrap(
+        `players [${start}-${start + batch.length}]`,
+        (
+          await this.client.from('players').upsert(
+            batch.map((player) => ({
+              id: player.id,
+              full_name: player.fullName,
+              position: player.position,
+              sleeper_player_id: player.sleeperPlayerId,
+            })),
+            { onConflict: 'id' },
+          )
+        ).error,
+      );
     }
-    unwrap(
-      'players',
-      (
-        await this.client.from('players').upsert(
-          players.map((player) => ({
-            id: player.id,
-            full_name: player.fullName,
-            position: player.position,
-            sleeper_player_id: player.sleeperPlayerId,
-          })),
-          { onConflict: 'id' },
-        )
-      ).error,
-    );
     return players.length;
+  }
+
+  /** Players already known to the database, keyed by Sleeper id. */
+  async readPlayersBySleeperId(
+    sleeperPlayerIds: readonly string[],
+  ): Promise<Map<string, PlayerRecord>> {
+    const found = new Map<string, PlayerRecord>();
+    const batchSize = 200;
+
+    for (let start = 0; start < sleeperPlayerIds.length; start += batchSize) {
+      const batch = sleeperPlayerIds.slice(start, start + batchSize);
+      const { data, error } = await this.client
+        .from('players')
+        .select('id, full_name, position, sleeper_player_id')
+        .in('sleeper_player_id', batch);
+      unwrap('read players', error);
+
+      for (const row of data ?? []) {
+        const sleeperPlayerId = row.sleeper_player_id as string | null;
+        if (sleeperPlayerId) {
+          found.set(sleeperPlayerId, {
+            id: String(row.id),
+            fullName: String(row.full_name),
+            position: String(row.position),
+            sleeperPlayerId,
+          });
+        }
+      }
+    }
+    return found;
   }
 
   async savePickInventory(picks: readonly DraftPickAsset[]): Promise<number> {
