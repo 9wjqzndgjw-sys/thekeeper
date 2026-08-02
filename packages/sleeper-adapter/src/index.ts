@@ -145,6 +145,8 @@ export interface NormalizedSleeperRoster {
   playerSleeperIds: string[];
   starterSleeperIds: string[];
   reserveSleeperIds: string[];
+  /** Sleeper player ids the manager has declared as keepers for this season. */
+  keeperSleeperPlayerIds: string[];
   wins: number;
   losses: number;
   ties: number;
@@ -289,6 +291,7 @@ const sleeperRosterSchema = z.object({
   players: nullableStringArraySchema,
   starters: nullableStringArraySchema,
   reserve: nullableStringArraySchema,
+  keepers: nullableStringArraySchema,
   settings: stringRecordSchema.optional(),
 });
 
@@ -757,6 +760,7 @@ function normalizeRoster(roster: SleeperRoster): NormalizedSleeperRoster {
     playerSleeperIds: roster.players ?? [],
     starterSleeperIds: roster.starters ?? [],
     reserveSleeperIds: roster.reserve ?? [],
+    keeperSleeperPlayerIds: roster.keepers ?? [],
     wins: numberSetting(settings, 'wins'),
     losses: numberSetting(settings, 'losses'),
     ties: numberSetting(settings, 'ties'),
@@ -1052,3 +1056,4 @@ async function defaultFetch(
 export * from './pick-ownership.js';
 export * from './franchise-mapping.js';
 export * from './import-season.js';
+export * from './keeper-reconstruction.js';

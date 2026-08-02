@@ -9,7 +9,9 @@
     "typecheck": "tsc --noEmit",
     "start": "tsx src/index.ts",
     "draft": "tsx src/draft.ts",
-    "board": "tsx src/board.ts"
+    "board": "tsx src/board.ts",
+    "import": "tsx src/import-league.ts",
+    "keepers": "tsx src/keepers.ts"
   },
   "dependencies": {
     "@keeper/domain": "*",

@@ -200,6 +200,7 @@ describe('SleeperAdapter endpoint mappers', () => {
         playerSleeperIds: ['1042', 'CAR'],
         starterSleeperIds: [],
         reserveSleeperIds: ['1042'],
+        keeperSleeperPlayerIds: [],
         wins: 7,
         losses: 6,
         ties: 1,

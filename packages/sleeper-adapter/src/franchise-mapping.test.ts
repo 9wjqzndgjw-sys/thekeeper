@@ -146,6 +146,7 @@ function createRoster(overrides: Partial<NormalizedSleeperRoster>): NormalizedSl
     playerSleeperIds: [],
     starterSleeperIds: [],
     reserveSleeperIds: [],
+    keeperSleeperPlayerIds: [],
     wins: 0,
     losses: 0,
     ties: 0,
