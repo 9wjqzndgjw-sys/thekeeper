@@ -111,6 +111,33 @@ Quality gates:
 npm run typecheck && npm run lint && npm test
 ```
 
+## Deploying the dashboard
+
+`vercel.json` builds only the web workspace and serves `apps/web/dist`. Import the
+repository in Vercel and set three environment variables on the project:
+
+| Variable                 | Value                                           |
+| ------------------------ | ----------------------------------------------- |
+| `VITE_SUPABASE_URL`      | the bare project URL, with no `/rest/v1` suffix |
+| `VITE_SUPABASE_ANON_KEY` | the anon key                                    |
+| `VITE_KEEPER_SEASON_ID`  | `season:<numeric league id>`                    |
+
+Only these three. **Never set `SUPABASE_SERVICE_ROLE_KEY` on the Vercel project**: anything
+prefixed `VITE_` is compiled into a file every visitor downloads, and the service role
+bypasses row level security entirely. The anon key is published by design and RLS is what
+protects the data.
+
+Two things worth knowing before the first deploy:
+
+- The build does not fail when these are missing. It succeeds and the page explains what is
+  unset, which is more useful than a red build for a variable someone forgot.
+- `VITE_KEEPER_SEASON_ID` contains the league id, so it is readable by anyone who loads the
+  page. That is unavoidable for a hosted league dashboard; Vercel's deployment protection is
+  the answer if the league would rather not be identifiable.
+
+The data pipeline stays local. `catalog`, `sync` and `project` write to Supabase with the
+service-role key from your machine, and the deployed page only ever reads.
+
 ## Design commitments
 
 **Every number is explainable.** Valuations carry a component breakdown, the engine
