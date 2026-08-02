@@ -4,9 +4,12 @@ import {
   createSleeperAdapter,
   reconstructKeeperRights,
 } from '@keeper/sleeper-adapter';
-import { SLEEPER_LEAGUE_ID } from './league-config.js';
+import { resolveSleeperLeagueId } from './league-config.js';
 
 /** Reconstructs this season's declared keepers and their costs from Sleeper. */
+const SLEEPER_LEAGUE_ID = resolveSleeperLeagueId(
+  process.argv.slice(2).find((arg) => !arg.startsWith('--')),
+);
 const adapter = createSleeperAdapter();
 const league = await adapter.getLeague(SLEEPER_LEAGUE_ID);
 const rosters = await adapter.getLeagueRosters(SLEEPER_LEAGUE_ID);

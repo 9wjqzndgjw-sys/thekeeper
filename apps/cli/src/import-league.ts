@@ -1,14 +1,15 @@
 import type { LeagueId, SeasonId } from '@keeper/domain';
 import { createSleeperAdapter, importSeasonDraftState } from '@keeper/sleeper-adapter';
-import { SLEEPER_LEAGUE_ID } from './league-config.js';
+import { resolveSleeperLeagueId } from './league-config.js';
 
 /**
  * Runs the read-only Sleeper import against a live league and prints what it resolved.
  *
  *   npm run import -w @keeper/cli [-- <sleeperLeagueId>]
  */
-const sleeperLeagueId =
-  process.argv.slice(2).find((arg) => !arg.startsWith('--')) ?? SLEEPER_LEAGUE_ID;
+const sleeperLeagueId = resolveSleeperLeagueId(
+  process.argv.slice(2).find((arg) => !arg.startsWith('--')),
+);
 
 const result = await importSeasonDraftState({
   adapter: createSleeperAdapter(),

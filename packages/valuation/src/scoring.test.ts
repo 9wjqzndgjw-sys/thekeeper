@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { describeUnscorableRules, scoreStatLine, type SleeperScoringSettings } from './scoring.js';
 
-// Captured live from league 1312062245152256000.
+// Captured live from the league's scoring_settings.
 const leagueScoring: SleeperScoringSettings = {
   pass_yd: 0.04,
   pass_td: 6,

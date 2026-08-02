@@ -1,15 +1,81 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join, parse } from 'node:path';
 import type { LineupSettings } from '@keeper/domain';
 import type { SleeperScoringSettings } from '@keeper/valuation';
 
 /**
- * Captured from GET /league/1312062245152256000 on 2026-08-02.
+ * Reads `.env.local` into `process.env` without taking a dependency. A value already set
+ * in the environment always wins, so an explicit shell variable is never overwritten.
  *
- * Checked in so the board can be produced offline. It should be replaced by a live
- * `importSeasonDraftState` call once the import is wired; until then, treat this as a
- * snapshot that can drift from the league.
+ * Searches upward from the working directory, because `npm run -w <workspace>` runs with
+ * the cwd set to that workspace while the file lives at the repository root.
  */
-export const SLEEPER_LEAGUE_ID = '1312062245152256000';
+function loadLocalEnv(): void {
+  let contents: string;
+  let directory = process.cwd();
+  const { root } = parse(directory);
 
+  for (;;) {
+    try {
+      contents = readFileSync(join(directory, '.env.local'), 'utf8');
+      break;
+    } catch {
+      if (directory === root) {
+        return;
+      }
+      directory = dirname(directory);
+    }
+  }
+
+  for (const rawLine of contents.split('\n')) {
+    const line = rawLine.trim();
+    if (line.length === 0 || line.startsWith('#')) {
+      continue;
+    }
+
+    const separator = line.indexOf('=');
+    if (separator === -1) {
+      continue;
+    }
+
+    const key = line.slice(0, separator).trim();
+    const value = line
+      .slice(separator + 1)
+      .trim()
+      .replace(/^['"]|['"]$/g, '');
+    if (key.length > 0 && process.env[key] === undefined) {
+      process.env[key] = value;
+    }
+  }
+}
+
+/**
+ * Which league to read. Kept out of the tree because this repository is public and a
+ * league id identifies a real group of people, even though it is not itself a secret.
+ *
+ * Set `SLEEPER_LEAGUE_ID` in `.env.local`, or pass an id as the first argument to any
+ * command that accepts one.
+ */
+export function resolveSleeperLeagueId(explicitLeagueId?: string): string {
+  loadLocalEnv();
+
+  const leagueId = explicitLeagueId ?? process.env.SLEEPER_LEAGUE_ID;
+  if (!leagueId) {
+    throw new Error(
+      'No league id. Set SLEEPER_LEAGUE_ID in .env.local, or pass one as the first argument.',
+    );
+  }
+  if (!/^[0-9]+$/.test(leagueId)) {
+    throw new Error(`Sleeper league ids are numeric; received '${leagueId}'.`);
+  }
+  return leagueId;
+}
+
+/**
+ * League settings captured from the Sleeper API. Checked in so a board can be produced
+ * offline; replace with a live `importSeasonDraftState` call once the import is wired,
+ * and until then treat this as a snapshot that can drift.
+ */
 export const LEAGUE_SCORING: SleeperScoringSettings = {
   pass_yd: 0.04,
   pass_td: 6,
