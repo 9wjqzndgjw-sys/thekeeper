@@ -322,24 +322,27 @@ export function resolveKeeperCombination(
   };
 }
 
+/**
+ * Cheapest round a keeper cost can reach. This league caps at the first round: once a
+ * player has climbed to a first-round cost he stays there rather than becoming
+ * unkeepable. Keeping two such players is still limited, but by pick inventory rather
+ * than by cost -- each consumes a first-round pick, and nothing is earlier to displace
+ * into, so a second one is only legal for a team that owns a second first-rounder.
+ */
+export const DEFAULT_MINIMUM_KEEPER_COST_ROUND = 1;
+
 export function advanceKeeperCostRound(
   previousRound: number,
   seasonsElapsed = 1,
   roundsAdvancedPerSeason = 1,
+  minimumRound = DEFAULT_MINIMUM_KEEPER_COST_ROUND,
 ): number {
   assertPositiveInteger('previousRound', previousRound);
   assertNonNegativeInteger('seasonsElapsed', seasonsElapsed);
   assertNonNegativeInteger('roundsAdvancedPerSeason', roundsAdvancedPerSeason);
+  assertPositiveInteger('minimumRound', minimumRound);
 
-  const nextRound = previousRound - seasonsElapsed * roundsAdvancedPerSeason;
-
-  if (nextRound < 1) {
-    throw new Error(
-      `Keeper cost cannot advance from round ${previousRound} by ${seasonsElapsed * roundsAdvancedPerSeason} round(s).`,
-    );
-  }
-
-  return nextRound;
+  return Math.max(minimumRound, previousRound - seasonsElapsed * roundsAdvancedPerSeason);
 }
 
 export interface ResolveNominalKeeperCostRoundInput {
@@ -349,6 +352,7 @@ export interface ResolveNominalKeeperCostRoundInput {
   seasonsElapsed?: number;
   roundsAdvancedPerSeason?: number;
   overrideRound?: number;
+  minimumRound?: number;
 }
 
 export function resolveNominalKeeperCostRound(input: ResolveNominalKeeperCostRoundInput): number {
@@ -374,6 +378,7 @@ export function resolveNominalKeeperCostRound(input: ResolveNominalKeeperCostRou
     input.previousRound,
     input.seasonsElapsed,
     input.roundsAdvancedPerSeason,
+    input.minimumRound,
   );
 }
 

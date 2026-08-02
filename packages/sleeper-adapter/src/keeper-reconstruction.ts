@@ -3,7 +3,7 @@ import type { NormalizedSleeperDraftPick, NormalizedSleeperRoster } from './inde
 
 export type KeeperReconstructionCode =
   | 'no_prior_draft_record'
-  | 'cost_would_pass_round_one'
+  | 'cost_held_at_ceiling'
   | 'unmapped_roster'
   | 'declared_keeper_not_on_roster';
 
@@ -24,6 +24,8 @@ export interface ReconstructKeeperRightsInput {
   costAdvancePerSeason?: number;
   /** Round assigned to a player with no prior draft record, per the league's undrafted rule. */
   undraftedKeeperRound: number;
+  /** Cheapest round a cost can reach. This league holds at the first round. */
+  minimumKeeperRound?: number;
   playerNameBySleeperId?: Readonly<Record<string, string>>;
 }
 
@@ -47,9 +49,11 @@ export interface ReconstructKeeperRightsResult {
  * advanced by the league's escalation. A player with no prior draft record was picked up
  * in-season and takes the league's undrafted-keeper round.
  *
- * A first-round keeper has no earlier round to advance into. Rather than invent a rule --
- * cap at one, forbid it, or something else -- that player is left unresolved and
- * reported, because which of those the league intends is a commissioner question.
+ * A cost that reaches the league's cheapest round holds there instead of advancing off
+ * the board. Keeping two such players is still constrained, but by pick inventory rather
+ * than by cost: each consumes a first-round pick and nothing is earlier to displace into,
+ * so the second is only legal for a team holding a second first-rounder. That falls out
+ * of pick resolution, so nothing special is needed here beyond noting the hold.
  */
 export function reconstructKeeperRights(
   input: ReconstructKeeperRightsInput,
@@ -120,21 +124,15 @@ export function reconstructKeeperRights(
         continue;
       }
 
-      const nominalRound = priorRound - advance;
-      if (nominalRound < 1) {
-        unresolved.push({
-          sleeperPlayerId,
-          franchiseId,
-          priorRound,
-          reason: 'cost_would_pass_round_one',
-        });
+      const minimumRound = input.minimumKeeperRound ?? 1;
+      const nominalRound = Math.max(minimumRound, priorRound - advance);
+      if (priorRound - advance < minimumRound) {
         diagnostics.push({
-          level: 'error',
-          code: 'cost_would_pass_round_one',
+          level: 'warning',
+          code: 'cost_held_at_ceiling',
           sleeperPlayerId,
-          message: `${describe(sleeperPlayerId)} cost round ${priorRound} last season, so advancing ${advance} round(s) would pass round one. The league's rule for this case is not recorded, so no cost was assigned.`,
+          message: `${describe(sleeperPlayerId)} cost round ${priorRound} last season and holds at round ${minimumRound} rather than advancing further. Keeping a second such player requires a second round-${minimumRound} pick.`,
         });
-        continue;
       }
 
       keeperRights.push(

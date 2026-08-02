@@ -190,6 +190,39 @@ describe('resolveKeeperCombination', () => {
     expect(resolution.displacements[0]!.reason).not.toMatch(/No owned/);
   });
 
+  it('needs a second first-round pick to keep a second first-round keeper', () => {
+    // Costs cap at round one, so two such keepers each demand a first-rounder and there
+    // is nothing earlier to displace into. One first-round pick therefore keeps one.
+    const firstA = makeKeeperRight('keeper-first-a', 1);
+    const firstB = makeKeeperRight('keeper-first-b', 1);
+    const ownedFirst = knownUserScenarioPickInventory.filter((pick) => pick.round === 1);
+    expect(ownedFirst).toHaveLength(1);
+
+    const withOnePick = resolveKeeperCombination([firstA, firstB], knownUserScenarioPickInventory, {
+      franchiseId: userFranchiseId,
+    });
+    expect(withOnePick.legal).toBe(false);
+    expect(withOnePick.invalidReason).toMatch(/No legal owned pick/);
+
+    // Acquire a second first-rounder, as a team holding the toilet-bowl 1.01 would, and
+    // both become keepable.
+    const extraFirst: DraftPickAsset = {
+      ...ownedFirst[0]!,
+      id: 'pick-acquired-1.01' as DraftPickAssetId,
+      slot: 1,
+      overallPick: 1,
+    };
+    const withTwoPicks = resolveKeeperCombination(
+      [firstA, firstB],
+      [...knownUserScenarioPickInventory, extraFirst],
+      { franchiseId: userFranchiseId },
+    );
+
+    expect(withTwoPicks.legal).toBe(true);
+    expect(withTwoPicks.resolvedPicks.map((pick) => pick.resolvedRound)).toEqual([1, 1]);
+    expect(new Set(withTwoPicks.resolvedPicks.map((p) => p.resolvedOverallPick)).size).toBe(2);
+  });
+
   it('rejects duplicate player rights in one same-season keeper set', () => {
     const jayden = knownScenarioKeeperRights.find(
       (right) => right.id === 'keeper-jayden-daniels-r5',
@@ -377,8 +410,16 @@ describe('advanceKeeperCostRound', () => {
     expect(advanceKeeperCostRound(8, 4)).toBe(4);
   });
 
-  it('errors explicitly when progression would pass round one', () => {
-    expect(() => advanceKeeperCostRound(1)).toThrow(/cannot advance/);
+  it('holds at the first round once a keeper reaches the ceiling', () => {
+    // League rule: a cost that reaches round one stays there rather than becoming
+    // unkeepable. Two such keepers are limited by pick inventory, not by cost.
+    expect(advanceKeeperCostRound(1)).toBe(1);
+    expect(advanceKeeperCostRound(2)).toBe(1);
+    expect(advanceKeeperCostRound(3, 5)).toBe(1);
+  });
+
+  it('lets a league set a different floor', () => {
+    expect(advanceKeeperCostRound(3, 5, 1, 2)).toBe(2);
   });
 });
 
