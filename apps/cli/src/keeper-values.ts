@@ -108,14 +108,25 @@ if (unmatchedKeepers.length > 0) {
   );
 }
 
-// Replacement comes from the pool that is actually draftable, so declared keepers are out.
+type LeaguePosition = 'QB' | 'RB' | 'WR' | 'TE' | 'DEF';
+
+const positionOf = (sleeperId: string): LeaguePosition =>
+  (positionBySleeperId.get(sleeperId) ?? 'RB') as LeaguePosition;
+
+const draftable = [...pointsBySleeperId.entries()].filter(([id]) => !declaredIds.has(id));
+const kept = [...pointsBySleeperId.entries()].filter(([id]) => declaredIds.has(id));
+const toCandidate = ([id, projectedPoints]: [string, number]) => ({
+  position: positionOf(id),
+  projectedPoints,
+});
+
+// Keepers are passed as rostered rather than dropped. They take supply *and* demand off the
+// board together: thirty-odd players held back also means thirty-odd roster slots the draft
+// no longer has to fill. Leaving them out entirely shrinks only the supply, which drives
+// replacement level down and inflates every value measured against it.
 const replacementLevels = computeReplacementLevels({
-  candidates: [...pointsBySleeperId.entries()]
-    .filter(([id]) => !declaredIds.has(id))
-    .map(([id, projectedPoints]) => ({
-      position: (positionBySleeperId.get(id) ?? 'RB') as 'QB' | 'RB' | 'WR' | 'TE' | 'DEF',
-      projectedPoints,
-    })),
+  candidates: draftable.map(toCandidate),
+  rosteredCandidates: kept.map(toCandidate),
   lineup: LEAGUE_LINEUP,
   teamCount: LEAGUE_TEAM_COUNT,
 });
@@ -128,15 +139,19 @@ const replacementLevels = computeReplacementLevels({
 // but it produces a curve that is not monotonic: the player who happens to go 92nd may be
 // worth less than the one who goes 93rd, which would price the earlier pick below the
 // later one.
-const draftBoardValues = [...pointsBySleeperId.entries()]
-  .filter(([id]) => !declaredIds.has(id))
-  .map(([id, projectedPoints]) => {
-    const position = (positionBySleeperId.get(id) ?? 'RB') as 'QB' | 'RB' | 'WR' | 'TE' | 'DEF';
-    return computeIntrinsicValue({
-      projectedPoints,
-      replacementLevel: replacementLevels[position] ?? 0,
-    }).intrinsicValue;
-  })
+//
+// Keepers are excluded here even though they counted toward replacement above. The two
+// answer different questions: replacement is what the league as a whole leaves on the
+// waiver wire, while the curve is what a pick can actually buy, and a kept player is not
+// for sale.
+const draftBoardValues = draftable
+  .map(
+    ([id, projectedPoints]) =>
+      computeIntrinsicValue({
+        projectedPoints,
+        replacementLevel: replacementLevels[positionOf(id)] ?? 0,
+      }).intrinsicValue,
+  )
   .sort((left, right) => right - left);
 
 const pickValueCurve = createPickValueCurveFromRankedValues(draftBoardValues);
@@ -178,8 +193,7 @@ for (const franchise of franchises) {
   for (const resolved of resolution.resolvedPicks) {
     const sleeperId = String(resolved.playerId);
     const points = pointsBySleeperId.get(sleeperId);
-    const position = (positionBySleeperId.get(sleeperId) ?? 'RB') as
-      'QB' | 'RB' | 'WR' | 'TE' | 'DEF';
+    const position = positionOf(sleeperId);
     const name = nameBySleeperId.get(sleeperId) ?? sleeperId;
 
     if (points === undefined) {

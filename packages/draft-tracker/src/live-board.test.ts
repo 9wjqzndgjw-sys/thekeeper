@@ -62,11 +62,85 @@ describe('computeLiveDraftBoard', () => {
     expect(board.availableCountByPosition.QB).toBe(2);
   });
 
-  it('lowers replacement level and raises remaining value as the pool thins', () => {
-    const beforeRun = computeLiveDraftBoard(baseInput({ selections: [] }));
-    const afterRun = computeLiveDraftBoard(
+  it('holds replacement level steady as the draft consumes supply and demand together', () => {
+    // A draft does not thin the pool in isolation. Every pick removes a player *and* fills
+    // the roster slot that created the demand for one, so the player who ends up last on
+    // the waiver wire is the same one either way. A board that let replacement slide as
+    // picks came in would inflate everyone still available, and the error would compound
+    // through the rounds -- worst in the late rounds, when the board is leaned on most.
+    const twoTeamLineup: LineupSettings = {
+      qb: 1,
+      rb: 1,
+      wr: 1,
+      te: 0,
+      flex: 0,
+      def: 0,
+      bench: 0,
+      ir: 0,
+    };
+    const deepPlayers: Player[] = [
+      player('qb-1', 'QB One', 'QB', 'qb-1'),
+      player('qb-2', 'QB Two', 'QB', 'qb-2'),
+      player('qb-3', 'QB Three', 'QB', 'qb-3'),
+      player('qb-4', 'QB Four', 'QB', 'qb-4'),
+      player('rb-1', 'RB One', 'RB', 'rb-1'),
+      player('rb-2', 'RB Two', 'RB', 'rb-2'),
+      player('rb-3', 'RB Three', 'RB', 'rb-3'),
+      player('wr-1', 'WR One', 'WR', 'wr-1'),
+      player('wr-2', 'WR Two', 'WR', 'wr-2'),
+      player('wr-3', 'WR Three', 'WR', 'wr-3'),
+    ];
+    const deepSource = createProjectionSourceFromPlayerSeasons([
+      projection('qb-1', 400),
+      projection('qb-2', 300),
+      projection('qb-3', 200),
+      projection('qb-4', 100),
+      projection('rb-1', 250),
+      projection('rb-2', 220),
+      projection('rb-3', 190),
+      projection('wr-1', 240),
+      projection('wr-2', 210),
+      projection('wr-3', 180),
+    ]);
+    const deepInput = (selections: TrackedSelection[]) =>
       baseInput({
-        // Both QBs above replacement are gone.
+        selections,
+        players: deepPlayers,
+        projectionSource: deepSource,
+        lineup: twoTeamLineup,
+        teamCount: 2,
+      });
+
+    // Two teams starting one quarterback each: replacement is the third-best, 200.
+    const beforeRun = computeLiveDraftBoard(deepInput([]));
+    expect(beforeRun.replacementLevels.QB).toBe(200);
+
+    // Both quarterback slots in the league now filled. Two fewer quarterbacks available,
+    // but two fewer needed, so the level does not move.
+    const afterRun = computeLiveDraftBoard(
+      deepInput([
+        selection({ overallPick: 1, playerId: 'qb-1' }),
+        selection({ overallPick: 2, playerId: 'qb-2' }),
+      ]),
+    );
+    expect(afterRun.replacementLevels.QB).toBe(200);
+
+    // And the player measured against it is worth the same before and after.
+    const remainingBefore = beforeRun.rows.find((row) => row.fullName === 'QB Four');
+    const remainingAfter = afterRun.rows.find((row) => row.fullName === 'QB Four');
+    expect(remainingAfter!.intrinsicValue).toBe(remainingBefore!.intrinsicValue);
+
+    // An untouched position is likewise unmoved.
+    expect(afterRun.replacementLevels.RB).toBe(beforeRun.replacementLevels.RB);
+  });
+
+  it('reprices a position once the league has drafted past its need', () => {
+    // Replacement holds while picks track demand, but a run genuinely past that demand is
+    // different: with every starting spot filled and no bench, one more quarterback adds
+    // nothing, so the last one standing sits at replacement rather than being worth his
+    // whole projection.
+    const board = computeLiveDraftBoard(
+      baseInput({
         selections: [
           selection({ overallPick: 1, playerId: 'sleeper-1' }),
           selection({ overallPick: 2, playerId: 'sleeper-2' }),
@@ -74,23 +148,8 @@ describe('computeLiveDraftBoard', () => {
       }),
     );
 
-    // One QB starter for one team, so replacement is the best QB nobody can start: the
-    // second-best (300) at first, and then nobody at all once only one QB remains.
-    expect(beforeRun.replacementLevels.QB).toBe(300);
-    expect(afterRun.replacementLevels.QB).toBe(0);
-
-    // The last QB was worthless against a 300-point replacement and is now worth his
-    // whole projection, which is the effect a live board has to show.
-    const qbBefore = beforeRun.rows.find((row) => row.fullName === 'Replacement QB');
-    const qbAfter = afterRun.rows.find((row) => row.fullName === 'Replacement QB');
-    expect(qbBefore!.intrinsicValue).toBe(0);
-    expect(qbAfter!.intrinsicValue).toBe(200);
-
-    // An untouched position keeps its replacement level and its values.
-    const rbBefore = beforeRun.rows.find((row) => row.fullName === 'Elite RB');
-    const rbAfter = afterRun.rows.find((row) => row.fullName === 'Elite RB');
-    expect(afterRun.replacementLevels.RB).toBe(beforeRun.replacementLevels.RB);
-    expect(rbAfter!.intrinsicValue).toBe(rbBefore!.intrinsicValue);
+    expect(board.replacementLevels.QB).toBe(200);
+    expect(board.rows.find((row) => row.fullName === 'Replacement QB')!.intrinsicValue).toBe(0);
   });
 
   it('is deterministic and does not depend on selection order', () => {

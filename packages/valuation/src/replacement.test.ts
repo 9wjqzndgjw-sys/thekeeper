@@ -138,6 +138,72 @@ describe('computeReplacementLevels', () => {
     expect(100 - levels.DEF!).toBeLessThan(30);
   });
 
+  it('is unchanged by which players are already rostered', () => {
+    // The league's talent pool and its roster demand are both fixed, so it cannot matter
+    // whether a given player is available or already held: he occupies the same slot
+    // either way. This is the property that makes keepers and completed draft picks safe
+    // to account for.
+    const baseline = computeReplacementLevels({ candidates, lineup, teamCount: 2 });
+
+    const withHoldings = computeReplacementLevels({
+      candidates: candidates.filter(
+        (candidate) => candidate.projectedPoints !== 100 && candidate.projectedPoints !== 90,
+      ),
+      rosteredCandidates: [
+        { position: 'QB', projectedPoints: 100 },
+        { position: 'RB', projectedPoints: 90 },
+      ],
+      lineup,
+      teamCount: 2,
+    });
+
+    expect(withHoldings).toEqual(baseline);
+  });
+
+  it('sinks when rostered players are dropped from the pool instead of declared', () => {
+    // The failure this guards against. Omitting held players shrinks the supply while the
+    // league still demands two full rosters, so the cascade digs a round deeper than it
+    // should and replacement falls -- here all the way to zero, which would make every
+    // remaining quarterback look like a franchise cornerstone.
+    const held: ReplacementCandidate[] = [
+      { position: 'QB', projectedPoints: 100 },
+      { position: 'QB', projectedPoints: 80 },
+    ];
+    const stillAvailable = candidates.filter(
+      (candidate) => !held.some((entry) => entry.projectedPoints === candidate.projectedPoints),
+    );
+
+    const dropped = computeReplacementLevels({
+      candidates: stillAvailable,
+      lineup,
+      teamCount: 2,
+    });
+    const declared = computeReplacementLevels({
+      candidates: stillAvailable,
+      rosteredCandidates: held,
+      lineup,
+      teamCount: 2,
+    });
+
+    expect(dropped.QB).toBe(0);
+    expect(declared.QB).toBe(60);
+  });
+
+  it('never reports a rostered player as the replacement level', () => {
+    // A team can hold someone worth less than the roster cutoff, so a rostered player can
+    // survive the cascade. He is still unavailable, and pricing draftable players against
+    // him would understate every one of them.
+    const levels = computeReplacementLevels({
+      candidates: candidates.filter((candidate) => candidate.position === 'DEF'),
+      rosteredCandidates: [{ position: 'DEF', projectedPoints: 15 }],
+      lineup: { ...lineup, qb: 0, rb: 0, wr: 0, te: 0, flex: 0 },
+      teamCount: 2,
+    });
+
+    // Starters take 40 and 20. What is left is the rostered 15 and the available 10.
+    expect(levels.DEF).toBe(10);
+  });
+
   it('produces a strictly lower (or equal) replacement level as bench spots increase', () => {
     const shallow = computeReplacementLevels({ candidates, lineup, teamCount: 2 });
     const deep = computeReplacementLevels({

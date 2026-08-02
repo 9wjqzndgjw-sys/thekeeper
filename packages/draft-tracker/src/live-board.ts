@@ -95,9 +95,19 @@ export function computeLiveDraftBoard(input: ComputeLiveDraftBoardInput): LiveDr
 
   const projectedByPlayer = new Map<PlayerId, number>();
   const replacementCandidates: ReplacementCandidate[] = [];
-  for (const player of availablePlayers) {
+  // Players already off the board still occupy the roster slots they were drafted into, so
+  // they are handed over as rostered rather than discarded. Counting only the players left
+  // would shrink the pool pick by pick while the league's roster demand stayed fixed,
+  // walking replacement level down as the draft ran and making every remaining player look
+  // better the later it got.
+  const rosteredCandidates: ReplacementCandidate[] = [];
+  for (const player of input.players) {
     const projectedPoints = input.projectionSource.getProjectedPoints(player.id, input.seasonId);
     if (projectedPoints === null) {
+      continue;
+    }
+    if (isDrafted(player)) {
+      rosteredCandidates.push({ position: player.position, projectedPoints });
       continue;
     }
     projectedByPlayer.set(player.id, projectedPoints);
@@ -106,6 +116,7 @@ export function computeLiveDraftBoard(input: ComputeLiveDraftBoardInput): LiveDr
 
   const replacementLevels = computeReplacementLevels({
     candidates: replacementCandidates,
+    rosteredCandidates,
     lineup: input.lineup,
     teamCount: input.teamCount,
   });
