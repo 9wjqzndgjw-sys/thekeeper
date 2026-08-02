@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import type { SeasonId } from '@keeper/domain';
 import { createServiceClientFromEnv, KeeperRepository } from '@keeper/persistence';
 import { loadProjections, matchProjectionsToCatalog } from '@keeper/projections';
+import type { SleeperScoringSettings } from '@keeper/valuation';
 import { LEAGUE_SCORING, resolveSleeperLeagueId } from './league-config.js';
 
 /**
@@ -28,12 +29,30 @@ if (!skillCsv) {
 
 const repository = new KeeperRepository(createServiceClientFromEnv());
 
+// Scoring comes from the imported league rather than the checked-in constant. The two
+// agree today, but a rule change lands in Sleeper and the constant would keep rescoring
+// every player under last year's rules while looking entirely confident about it.
+const storedSeason = await repository.readLeagueSeason(seasonId);
+const storedScoring = storedSeason?.scoringSettings ?? {};
+const usingStoredScoring = Object.keys(storedScoring).length > 0;
+
+if (!usingStoredScoring) {
+  console.warn(
+    '  No scoring settings stored for this season, so the checked-in constant was used. Run ' +
+      '"npm run sync -w @keeper/cli" first to score under the rules the league actually has.',
+  );
+}
+
 const loaded = loadProjections({
   skillPositionCsv: readFileSync(skillCsv, 'utf8'),
   defenseCsv: defenseCsv ? readFileSync(defenseCsv, 'utf8') : undefined,
-  scoring: LEAGUE_SCORING,
+  scoring: usingStoredScoring ? (storedScoring as SleeperScoringSettings) : LEAGUE_SCORING,
   seasonId,
 });
+
+console.log(
+  `Scoring source:      ${usingStoredScoring ? 'imported league settings' : 'checked-in constant'}`,
+);
 
 const projectedById = new Map(
   loaded.playerSeasons.map((season) => [String(season.playerId), season.projectedPoints ?? 0]),
@@ -66,7 +85,10 @@ if (matched.unmatchedProjectionNames.length > 0) {
   console.log(`  ${matched.unmatchedProjectionNames.slice(0, 12).join(', ')}`);
 }
 
-const written = await repository.savePlayerSeasons(
+// Replaced rather than merged: a player dropped from the export should leave the board,
+// not linger on last week's projection.
+const { written, removed } = await repository.replacePlayerSeasons(
+  seasonId,
   [...matched.pointsBySleeperId.entries()].flatMap(([sleeperId, projectedPoints]) => {
     const playerId = catalogIdBySleeperId.get(sleeperId);
     return playerId === undefined
@@ -82,7 +104,7 @@ const written = await repository.savePlayerSeasons(
   }),
 );
 
-console.log(`\nWrote ${written} player season(s).`);
+console.log(`\nWrote ${written} player season(s)${removed > 0 ? `, removed ${removed}` : ''}.`);
 console.log(`  player_seasons rows: ${await repository.countRows('player_seasons')}`);
 
 if (loaded.diagnostics.length > 0) {

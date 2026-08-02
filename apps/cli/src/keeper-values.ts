@@ -40,6 +40,23 @@ const pointsOf = (playerId: string): number =>
 const positionById = new Map(loaded.players.map((p) => [String(p.id), p.position as Position]));
 const nameById = new Map(loaded.players.map((p) => [String(p.id), p.fullName]));
 
+// The exact picks the declared keepers consume. Each is a draft slot that removes nobody
+// from the pool, so the post-declaration curve has to skip it rather than treat it as
+// another player leaving -- otherwise every pick is priced too cheaply.
+const declaredKeeperOverallPicks = snapshot.franchises.flatMap((franchise) => {
+  const rights = snapshot.keeperRights.filter(
+    (right) =>
+      String(right.franchiseId) === franchise.id &&
+      loaded.declaredPlayerIds.has(String(right.playerId)),
+  );
+  return rights.length === 0
+    ? []
+    : resolveKeeperCombination(rights, snapshot.pickInventory, {
+        franchiseId: franchise.id as FranchiseId,
+        maxKeepers: snapshot.league.rules.maxKeepers,
+      }).resolvedPicks.map((pick) => pick.resolvedOverallPick);
+});
+
 const scenarios = buildDeclarationScenarios({
   candidates: loaded.players.map((player) => ({
     position: player.position as Position,
@@ -48,6 +65,7 @@ const scenarios = buildDeclarationScenarios({
   })),
   lineup: snapshot.league.lineup,
   teamCount: snapshot.league.rules.teamCount,
+  declaredKeeperOverallPicks,
 });
 
 // A candidate with no projection cannot be valued. Treating him as zero would rank him as

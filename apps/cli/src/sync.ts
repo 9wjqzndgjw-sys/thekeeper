@@ -193,9 +193,17 @@ const persistableRights = keeperRights.filter((right) => knownPlayers.has(String
 const declared = new Set(declaredSleeperPlayerIds);
 const declaredRights = persistableRights.filter((right) => declared.has(String(right.playerId)));
 
-const pickCount = await repository.savePickInventory(imported.pickInventory);
-const rightCount = await repository.saveKeeperRights(persistableRights);
-const decisionCount = await repository.saveKeeperDecisions(
+// An import states what the season *is*, so anything it omits has to be removed rather
+// than left behind: upserting alone meant a withdrawn declaration kept its player off the
+// draft board forever.
+//
+// Order is forced by the foreign keys. Rights are written first so decisions can reference
+// them, decisions are replaced next, and only then are stale rights and picks pruned --
+// deleting a right or a pick still referenced by a decision would be rejected.
+await repository.saveKeeperRights(persistableRights);
+
+const decisions = await repository.replaceKeeperDecisions(
+  seasonId,
   declaredRights.map((right) => ({
     seasonId,
     franchiseId: String(right.franchiseId),
@@ -206,14 +214,22 @@ const decisionCount = await repository.saveKeeperDecisions(
     declaredAt: null,
   })),
 );
+const rights = await repository.replaceKeeperRights(seasonId, persistableRights);
+const picks = await repository.replacePickInventory(seasonId, imported.pickInventory);
+
+const pickCount = picks.written;
+const rightCount = rights.written;
+const decisionCount = decisions.written;
 
 console.log('\nWritten');
 console.log(`  raw snapshots     ${snapshotCount}`);
 console.log(`  franchises        ${franchiseCount}`);
 console.log(`  players           ${playerCount} (from catalog)`);
-console.log(`  pick assets       ${pickCount}`);
-console.log(`  keeper rights     ${rightCount} (one per rostered player)`);
-console.log(`  keeper decisions  ${decisionCount} (declared)`);
+console.log(`  pick assets       ${pickCount}${removedSuffix(picks.removed)}`);
+console.log(
+  `  keeper rights     ${rightCount} (one per rostered player)${removedSuffix(rights.removed)}`,
+);
+console.log(`  keeper decisions  ${decisionCount} (declared)${removedSuffix(decisions.removed)}`);
 
 console.log('\nRead back from the database');
 for (const table of [
@@ -230,3 +246,8 @@ for (const table of [
 const readBack = await repository.readFranchises(seasonId);
 console.log(`\nFranchises read back: ${readBack.length}`);
 console.log(`  ${readBack.map((f) => f.displayName).join(', ')}`);
+
+/** Removals are the part a merge-only import used to hide, so they are always reported. */
+function removedSuffix(removed: number): string {
+  return removed > 0 ? `, ${removed} removed` : '';
+}

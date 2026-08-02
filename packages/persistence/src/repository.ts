@@ -78,6 +78,12 @@ export interface PlayerRecord {
 /** Rows written per table, so a caller can confirm what actually landed. */
 export type PersistCounts = Record<string, number>;
 
+/** What a replace actually did, so a caller can see removals rather than infer them. */
+export interface ReplaceCounts {
+  written: number;
+  removed: number;
+}
+
 function unwrap(label: string, error: { message: string } | null): void {
   if (error) {
     throw new Error(`${label}: ${error.message}`);
@@ -540,6 +546,112 @@ export class KeeperRepository {
       .select('*', { count: 'exact', head: true });
     unwrap(`count ${table}`, error);
     return count ?? 0;
+  }
+
+  /**
+   * Deletes rows for a season that the caller did not just write.
+   *
+   * Upserting alone merges rather than replaces, so anything withdrawn upstream survives
+   * forever: a manager who undeclares a keeper leaves that player off the draft board
+   * permanently, because nothing ever removes the decision. An import is a statement about
+   * the whole season, so what it omits has to go.
+   *
+   * Existing keys are read first and the difference deleted explicitly, rather than sending
+   * a `not.in` filter -- a season carries hundreds of keys and that request would exceed
+   * what a URL can hold.
+   */
+  private async deleteSeasonRowsExcept(
+    table: string,
+    keyColumn: string,
+    seasonId: SeasonId,
+    keepKeys: ReadonlySet<string>,
+    batchSize = 100,
+  ): Promise<number> {
+    const { data, error } = await this.client
+      .from(table)
+      .select(keyColumn)
+      .eq('season_id', seasonId);
+    unwrap(`read ${table} keys`, error);
+
+    const stale = ((data ?? []) as unknown as Record<string, unknown>[])
+      .map((row) => String(row[keyColumn]))
+      .filter((key) => !keepKeys.has(key));
+
+    for (let start = 0; start < stale.length; start += batchSize) {
+      const batch = stale.slice(start, start + batchSize);
+      const { error: deleteError } = await this.client
+        .from(table)
+        .delete()
+        .eq('season_id', seasonId)
+        .in(keyColumn, batch);
+      unwrap(`delete stale ${table}`, deleteError);
+    }
+    return stale.length;
+  }
+
+  /** Keeper rights for a season, replaced wholesale rather than merged. */
+  async replaceKeeperRights(
+    seasonId: SeasonId,
+    rights: readonly KeeperRight[],
+  ): Promise<ReplaceCounts> {
+    const written = await this.saveKeeperRights(rights);
+    const removed = await this.deleteSeasonRowsExcept(
+      'keeper_rights',
+      'id',
+      seasonId,
+      new Set(rights.map((right) => String(right.id))),
+    );
+    return { written, removed };
+  }
+
+  /**
+   * Declarations for a season, replaced wholesale.
+   *
+   * Notably this must run even when the incoming set is empty: a league where everybody
+   * withdrew is exactly the case where every stored decision is stale.
+   */
+  async replaceKeeperDecisions(
+    seasonId: SeasonId,
+    decisions: readonly KeeperDecisionRecord[],
+  ): Promise<ReplaceCounts> {
+    const written = await this.saveKeeperDecisions(decisions);
+    const removed = await this.deleteSeasonRowsExcept(
+      'keeper_decisions',
+      'player_id',
+      seasonId,
+      new Set(decisions.map((decision) => String(decision.playerId))),
+    );
+    return { written, removed };
+  }
+
+  /** Pick inventory for a season, replaced wholesale. */
+  async replacePickInventory(
+    seasonId: SeasonId,
+    picks: readonly DraftPickAsset[],
+  ): Promise<ReplaceCounts> {
+    const written = await this.savePickInventory(picks);
+    const removed = await this.deleteSeasonRowsExcept(
+      'draft_pick_assets',
+      'id',
+      seasonId,
+      new Set(picks.map((pick) => String(pick.id))),
+    );
+    return { written, removed };
+  }
+
+  /** Projections for a season, replaced wholesale. */
+  async replacePlayerSeasons(
+    seasonId: SeasonId,
+    records: readonly PlayerSeasonRecord[],
+  ): Promise<ReplaceCounts> {
+    const written = await this.savePlayerSeasons(records);
+    const removed = await this.deleteSeasonRowsExcept(
+      'player_seasons',
+      'player_id',
+      seasonId,
+      new Set(records.map((record) => String(record.playerId))),
+    );
+    return { written, removed };
   }
 
   async readFranchises(seasonId: SeasonId): Promise<{ id: string; displayName: string }[]> {
