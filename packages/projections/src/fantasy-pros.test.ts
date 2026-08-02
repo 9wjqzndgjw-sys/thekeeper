@@ -126,12 +126,16 @@ describe('loadProjections', () => {
   });
 });
 
+// Point these at real exports to run the integration check locally:
+//   KEEPER_SKILL_PROJECTIONS_CSV=... KEEPER_DEFENSE_PROJECTIONS_CSV=... npm test
 describe('the real exported files', () => {
-  const skillPath =
-    'C:/Users/RENAME/Downloads/2026 NFL Fantasy Football Season Rankings  Projections  Fantasy Points (1).csv';
-  const defensePath = 'C:/Users/RENAME/Downloads/2026_defproj.csv';
+  const skillPath = process.env.KEEPER_SKILL_PROJECTIONS_CSV;
+  const defensePath = process.env.KEEPER_DEFENSE_PROJECTIONS_CSV;
 
   const available = (() => {
+    if (!skillPath || !defensePath) {
+      return false;
+    }
     try {
       readFileSync(skillPath, 'utf8');
       readFileSync(defensePath, 'utf8');
@@ -144,8 +148,8 @@ describe('the real exported files', () => {
   // Skipped anywhere the exports are not present, so CI stays green without them.
   it.skipIf(!available)('loads every skill player and defense', () => {
     const loaded = loadProjections({
-      skillPositionCsv: readFileSync(skillPath, 'utf8'),
-      defenseCsv: readFileSync(defensePath, 'utf8'),
+      skillPositionCsv: readFileSync(skillPath!, 'utf8'),
+      defenseCsv: readFileSync(defensePath!, 'utf8'),
       scoring: leagueScoring,
       seasonId,
     });
