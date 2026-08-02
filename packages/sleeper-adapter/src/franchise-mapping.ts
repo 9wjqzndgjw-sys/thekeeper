@@ -91,7 +91,7 @@ export function buildFranchiseMap(input: BuildFranchiseMapInput): FranchiseMap {
   const appliedOverrides: AppliedFranchiseIdentityOverride[] = [];
 
   for (const roster of [...input.rosters].sort((a, b) => a.rosterId - b.rosterId)) {
-    const inferred = inferFranchiseIdentity(roster, rostersByOwner, diagnostics);
+    const inferred = inferFranchiseIdentity(input.leagueId, roster, rostersByOwner, diagnostics);
     const override = overridesByRosterId.get(roster.rosterId);
 
     if (
@@ -152,7 +152,21 @@ export function buildFranchiseMap(input: BuildFranchiseMapInput): FranchiseMap {
   };
 }
 
+/**
+ * Ids are league-scoped. Deriving one from a Sleeper user alone would make the same
+ * manager a single franchise across every league they play in, and the roster fallback
+ * would collide across seasons as well as leagues.
+ */
+function ownerFranchiseId(leagueId: LeagueId, sleeperUserId: string): FranchiseId {
+  return `franchise:${leagueId}:user:${sleeperUserId}` as FranchiseId;
+}
+
+function rosterFallbackFranchiseId(leagueId: LeagueId, rosterId: number): FranchiseId {
+  return `franchise:${leagueId}:roster:${rosterId}` as FranchiseId;
+}
+
 function inferFranchiseIdentity(
+  leagueId: LeagueId,
   roster: NormalizedSleeperRoster,
   rostersByOwner: ReadonlyMap<string, readonly number[]>,
   diagnostics: FranchiseMappingDiagnostic[],
@@ -165,7 +179,7 @@ function inferFranchiseIdentity(
       message: `Roster ${roster.rosterId} has no owner, so its franchise identity is season-local and will not survive a roster-id change.`,
     });
     return {
-      franchiseId: `franchise:roster-${roster.rosterId}` as FranchiseId,
+      franchiseId: rosterFallbackFranchiseId(leagueId, roster.rosterId),
       source: 'roster_fallback',
     };
   }
@@ -180,13 +194,13 @@ function inferFranchiseIdentity(
       message: `User ${roster.ownerSleeperUserId} owns rosters ${[...owned].sort((a, b) => a - b).join(', ')}; each roster falls back to a season-local identity. Use an override to assign stable identities.`,
     });
     return {
-      franchiseId: `franchise:roster-${roster.rosterId}` as FranchiseId,
+      franchiseId: rosterFallbackFranchiseId(leagueId, roster.rosterId),
       source: 'roster_fallback',
     };
   }
 
   return {
-    franchiseId: `franchise:${roster.ownerSleeperUserId}` as FranchiseId,
+    franchiseId: ownerFranchiseId(leagueId, roster.ownerSleeperUserId),
     source: 'owner',
   };
 }

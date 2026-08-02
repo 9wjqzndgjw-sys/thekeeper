@@ -32,8 +32,12 @@ describe('importSeasonDraftState', () => {
       'Blair',
     ]);
     // Franchise identity is keyed on the owning user, not the roster id.
-    expect(result.franchiseMap.rosterIdToFranchiseId[1]).toBe('franchise:user-a');
-    expect(result.franchiseMap.rosterIdToFranchiseId[2]).toBe('franchise:user-b');
+    expect(result.franchiseMap.rosterIdToFranchiseId[1]).toBe(
+      'franchise:league-keeper:user:user-a',
+    );
+    expect(result.franchiseMap.rosterIdToFranchiseId[2]).toBe(
+      'franchise:league-keeper:user:user-b',
+    );
   });
 
   it("carries a traded pick through to the acquiring franchise's inventory", async () => {
@@ -44,13 +48,13 @@ describe('importSeasonDraftState', () => {
     expect(tradedPick).toMatchObject({
       round: 2,
       slot: 1,
-      originalFranchiseId: 'franchise:user-a',
-      currentFranchiseId: 'franchise:user-b',
+      originalFranchiseId: 'franchise:league-keeper:user:user-a',
+      currentFranchiseId: 'franchise:league-keeper:user:user-b',
       ownershipConfidence: 'confirmed',
     });
 
     const ownedByBlair = result.pickInventory.filter(
-      (pick) => pick.currentFranchiseId === 'franchise:user-b',
+      (pick) => pick.currentFranchiseId === 'franchise:league-keeper:user:user-b',
     );
     expect(ownedByBlair.map((pick) => pick.overallPick)).toEqual([2, 3, 4]);
   });
@@ -73,7 +77,7 @@ describe('importSeasonDraftState', () => {
     expect(result.diagnostics).toContainEqual(
       expect.objectContaining({ stage: 'franchise_mapping', code: 'roster_without_owner' }),
     );
-    expect(result.franchiseMap.rosterIdToFranchiseId[2]).toBe('franchise:roster-2');
+    expect(result.franchiseMap.rosterIdToFranchiseId[2]).toBe('franchise:league-keeper:roster:2');
   });
 
   it('reports a missing draft instead of throwing, and returns the franchises it did resolve', async () => {

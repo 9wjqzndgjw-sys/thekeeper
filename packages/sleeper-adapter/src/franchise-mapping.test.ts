@@ -68,7 +68,7 @@ describe('buildFranchiseMap', () => {
   });
 
   it('lets an audited override keep franchise identity when a team changes hands', () => {
-    const priorFranchiseId = 'franchise:user-a' as FranchiseId;
+    const priorFranchiseId = 'franchise:league-keeper:user:user-a' as FranchiseId;
     const result = buildFranchiseMap({
       leagueId,
       rosters: [createRoster({ rosterId: 1, ownerSleeperUserId: 'user-new' })],
@@ -88,7 +88,7 @@ describe('buildFranchiseMap', () => {
     expect(result.sleeperUserIdToFranchiseId['user-new']).toBe(priorFranchiseId);
     expect(result.mapped[0]?.source).toBe('manual_override');
     expect(result.appliedOverrides[0]).toMatchObject({
-      priorFranchiseId: 'franchise:user-new',
+      priorFranchiseId: 'franchise:league-keeper:user:user-new',
       franchiseId: priorFranchiseId,
       overriddenBy: 'commissioner',
     });
@@ -116,7 +116,7 @@ describe('buildFranchiseMap', () => {
       ],
     });
 
-    expect(result.rosterIdToFranchiseId[1]).toBe('franchise:user-a');
+    expect(result.rosterIdToFranchiseId[1]).toBe('franchise:league-keeper:user:user-a');
     expect(result.diagnostics).toContainEqual(
       expect.objectContaining({ code: 'invalid_override', rosterId: 1 }),
     );
