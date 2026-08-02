@@ -13,6 +13,7 @@ import {
 } from '@keeper/draft-tracker';
 import {
   optimizeKeeperCombinations,
+  resolveKeeperCombination,
   type KeeperOptimizationResult,
 } from '@keeper/keeper-optimizer';
 import {
@@ -92,6 +93,10 @@ export function createAppContext(input: {
   // whole rosters out of the draft pool.
   const declaredPlayerIds = new Set(input.declaredPlayerIds ?? []);
 
+  const declaredRights = snapshot.keeperRights.filter((right) =>
+    declaredPlayerIds.has(String(right.playerId)),
+  );
+
   const scenarios = buildDeclarationScenarios({
     candidates: players.map((player) => ({
       position: player.position as Position,
@@ -100,6 +105,7 @@ export function createAppContext(input: {
     })),
     lineup: snapshot.league.lineup,
     teamCount: snapshot.league.rules.teamCount,
+    declaredKeeperOverallPicks: resolveKeeperOverallPicks(snapshot, declaredRights),
   });
 
   const context: BaseContext = {
@@ -118,9 +124,7 @@ export function createAppContext(input: {
 
   return {
     ...context,
-    declaredKeepers: snapshot.keeperRights.filter((right) =>
-      declaredPlayerIds.has(String(right.playerId)),
-    ),
+    declaredKeepers: declaredRights,
     expectedKeepers,
     pickValueCurveAssumingExpected: buildPickValueCurveForPool({
       candidates: players
@@ -131,6 +135,7 @@ export function createAppContext(input: {
         })),
       replacementLevels: scenarios.replacementLevels,
       version: 'post-expected-keepers',
+      keeperConsumedOverallPicks: resolveKeeperOverallPicks(snapshot, expectedKeepers),
     }),
     optimization: optimizeForFranchise(context, snapshot.userFranchiseId),
   };
@@ -141,6 +146,28 @@ type BaseContext = Omit<
   AppContext,
   'optimization' | 'expectedKeepers' | 'declaredKeepers' | 'pickValueCurveAssumingExpected'
 >;
+
+/**
+ * The exact overall picks a set of keepers consumes, resolved per franchise so displacement
+ * onto an earlier owned pick is accounted for rather than assumed away.
+ */
+function resolveKeeperOverallPicks(
+  snapshot: LeagueStateSnapshot,
+  rights: readonly KeeperRight[],
+): number[] {
+  const byFranchise = new Map<string, KeeperRight[]>();
+  for (const right of rights) {
+    const key = String(right.franchiseId);
+    byFranchise.set(key, [...(byFranchise.get(key) ?? []), right]);
+  }
+
+  return [...byFranchise.entries()].flatMap(([franchiseId, franchiseRights]) =>
+    resolveKeeperCombination(franchiseRights, snapshot.pickInventory, {
+      franchiseId: franchiseId as FranchiseId,
+      maxKeepers: snapshot.league.rules.maxKeepers,
+    }).resolvedPicks.map((pick) => pick.resolvedOverallPick),
+  );
+}
 
 /**
  * The keepers the league is expected to hold: each franchise's best set, capped by the

@@ -1,4 +1,5 @@
 import type {
+  DraftId,
   FranchiseId,
   LeagueRules,
   LeagueStateSnapshot,
@@ -127,6 +128,10 @@ export async function loadLeagueSnapshot(
     caveats.push('No keeper has been declared yet, so both valuations are the same.');
   }
 
+  if (!season.sleeperDraftId) {
+    caveats.push('This season has no draft yet, so the live board cannot receive picks.');
+  }
+
   // Completed selections are not imported yet. Rosters are covered: a keeper right exists
   // for every rostered player, which is the same information the engine needs.
   caveats.push('Completed draft selections are not imported yet.');
@@ -151,7 +156,7 @@ export async function loadLeagueSnapshot(
         sleeperLeagueId: season.sleeperLeagueId,
         previousSleeperLeagueId: season.previousSleeperLeagueId,
         status: season.status,
-        draftId: null,
+        draftId: (season.sleeperDraftId ?? null) as DraftId | null,
         keeperDeadline: '',
         draftTime: '',
       },
@@ -163,7 +168,24 @@ export async function loadLeagueSnapshot(
       rosters: [],
       keeperRights,
       pickInventory,
-      draft: null,
+      // Carried through from the stored season. Dropping it left the tracker with nothing
+      // to poll, so the live board could never receive a pick and sat permanently showing
+      // the whole pool -- including players who are kept and will never be drafted.
+      draft: season.sleeperDraftId
+        ? {
+            id: `draft:${season.sleeperDraftId}` as DraftId,
+            seasonId: season.seasonId,
+            sleeperDraftId: season.sleeperDraftId,
+            rounds: season.draftRounds,
+            teamCount: season.teamCount,
+            orderMethod: 'snake',
+            thirdRoundReversal: rules.thirdRoundReversal,
+            status:
+              season.status === 'pre_draft' || season.status === 'drafting'
+                ? season.status
+                : 'complete',
+          }
+        : null,
       draftSelections: [],
       playerSeasons,
       userFranchiseId,

@@ -109,7 +109,9 @@ export const RECORDED_LEAGUE_POLICY: LeaguePolicy = {
   keeperDurationIndefinite: true,
   keeperCostAdvancePerSeason: 1,
   undraftedKeeperRound: 10,
-  keeperRightsTradeable: true,
+  // 01_LEAGUE_RULES.md: keeper rights cannot be traded separately from players. A player
+  // can be traded and his cost travels with him; the right itself is not an asset.
+  keeperRightsTradeable: false,
   tradesProcessImmediately: true,
   keeperDeadlineDaysBeforeDraft: 7,
   keeperDeclarationsPublicPreDraft: true,

@@ -19,3 +19,6 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
+      # The production build is its own failure surface: a broken deploy configuration
+      # passes every check above and still cannot ship.
+      - run: npm run build

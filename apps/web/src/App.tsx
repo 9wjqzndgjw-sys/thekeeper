@@ -92,7 +92,11 @@ export function Dashboard({ context }: { context: AppContext }) {
   );
   // Re-renders the relative "synced Ns ago" reading without waiting on a poll.
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const [activeBoard, setActiveBoard] = useState<BoardMode>('live');
+  // The live board is only the interesting one once a draft is actually running. Landing on
+  // it before then shows a board whose every row is still hypothetical.
+  const [activeBoard, setActiveBoard] = useState<BoardMode>(() =>
+    context.snapshot.draft?.status === 'drafting' ? 'live' : 'as_declared',
+  );
   const [franchiseId, setFranchiseId] = useState<FranchiseId>(context.snapshot.userFranchiseId);
 
   useEffect(() => {

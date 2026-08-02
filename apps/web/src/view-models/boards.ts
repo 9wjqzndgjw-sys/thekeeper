@@ -122,13 +122,20 @@ export function buildBoards(input: BuildBoardsInput): BoardViewModel[] {
     {
       mode: 'live',
       title: 'Live board',
-      poolDescription: `Pool with ${input.selections.length} recorded pick(s) removed.`,
+      poolDescription: `Pool with ${input.expectedKeeperRights.length} keeper(s) and ${input.selections.length} recorded pick(s) removed.`,
+      // Keepers are subtracted here as well as the recorded picks. A kept player never
+      // enters the draft, so a live board built from selections alone shows him as the best
+      // thing available -- and before the first pick is made that is the entire pool,
+      // topped by whichever keeper is the best player in the league.
       board: computeLiveDraftBoard({
         ...shared,
         pickValueCurve: input.pickValueCurveAssumingExpected,
-        selections: input.selections,
+        selections: [...asSelections(input.expectedKeeperRights), ...input.selections],
       }),
-      caveats: [],
+      caveats:
+        input.selections.length === 0
+          ? ['No picks have been recorded yet, so this is the expected post-keeper pool.']
+          : [],
     },
   ];
 }

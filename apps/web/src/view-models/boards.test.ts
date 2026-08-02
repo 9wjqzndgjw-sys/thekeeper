@@ -127,6 +127,41 @@ describe('buildBoards', () => {
     expect(live.board.availablePlayerCount).toBe(2);
   });
 
+  it('keeps keepers off the live board as well as recorded picks', () => {
+    // The live board is the landing view. Built from selections alone it showed the whole
+    // pool before the first pick -- headed by whichever keeper was the best player in the
+    // league, a recommendation for someone nobody can draft.
+    const live = board(
+      {
+        ...baseInput,
+        declaredKeeperRights: [],
+        expectedKeeperRights: [keeperRight('p-1')],
+        selections: [],
+      },
+      'live',
+    );
+
+    expect(live.board.rows.some((row) => row.fullName === 'Kept Star')).toBe(false);
+    expect(live.board.availablePlayerCount).toBe(2);
+    expect(live.caveats[0]).toMatch(/no picks have been recorded/i);
+  });
+
+  it('removes keepers and recorded picks together once the draft is running', () => {
+    const live = board(
+      {
+        ...baseInput,
+        declaredKeeperRights: [],
+        expectedKeeperRights: [keeperRight('p-1')],
+        selections: [selection('s-2')],
+      },
+      'live',
+    );
+
+    expect(live.board.availablePlayerCount).toBe(1);
+    expect(live.board.rows[0]).toMatchObject({ fullName: 'Still Free' });
+    expect(live.caveats).toEqual([]);
+  });
+
   it('does not let a keeper placeholder collide with a real selection', () => {
     const expected = board(
       {

@@ -52,6 +52,12 @@ export function buildDeclarationScenarios(input: {
   candidates: readonly DeclarationScenarioCandidate[];
   lineup: Parameters<typeof computeReplacementLevels>[0]['lineup'];
   teamCount: number;
+  /**
+   * The exact overall picks the declared keepers consume. Each one is a draft slot that
+   * takes nobody off the board, so the post-declaration curve must skip it rather than
+   * treat it as another player leaving the pool.
+   */
+  declaredKeeperOverallPicks?: readonly number[];
 }): DeclarationScenarios {
   const declared = input.candidates.filter((candidate) => candidate.declared);
   const undeclared = input.candidates.filter((candidate) => !candidate.declared);
@@ -74,6 +80,7 @@ export function buildDeclarationScenarios(input: {
       candidates: undeclared,
       replacementLevels,
       version: 'post-declaration',
+      keeperConsumedOverallPicks: input.declaredKeeperOverallPicks,
     }),
   };
 }
@@ -94,6 +101,8 @@ export function buildPickValueCurveForPool(input: {
   candidates: readonly { position: Position; projectedPoints: number }[];
   replacementLevels: ReplacementLevels;
   version?: string;
+  /** Overall picks consumed by keepers, which remove a slot but not a player. */
+  keeperConsumedOverallPicks?: readonly number[];
 }): PickValueCurve {
   return createPickValueCurveFromRankedValues(
     input.candidates
@@ -106,5 +115,6 @@ export function buildPickValueCurveForPool(input: {
       )
       .sort((left, right) => right - left),
     input.version,
+    input.keeperConsumedOverallPicks,
   );
 }
