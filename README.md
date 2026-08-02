@@ -113,8 +113,13 @@ npm run typecheck && npm run lint && npm test
 
 ## Deploying the dashboard
 
-`vercel.json` builds only the web workspace and serves `apps/web/dist`. Import the
-repository in Vercel and set three environment variables on the project:
+The Vercel project's **Root Directory is `apps/web`**, which is why `vercel.json` lives
+there rather than at the repository root: Vercel reads it from the root directory and
+ignores one placed above. It carries only a SPA rewrite and headers -- no build command and
+no output directory, because the project settings already describe the build correctly and
+an override that disagrees with the root directory fails the deploy.
+
+Set three environment variables on the project:
 
 | Variable                 | Value                                           |
 | ------------------------ | ----------------------------------------------- |
