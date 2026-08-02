@@ -290,6 +290,81 @@ export class KeeperRepository {
     return decisions.length;
   }
 
+  /** Every player the catalog knows, paged past PostgREST's default row cap. */
+  async readAllPlayers(pageSize = 1000): Promise<PlayerRecord[]> {
+    const players: PlayerRecord[] = [];
+
+    for (let from = 0; ; from += pageSize) {
+      const { data, error } = await this.client
+        .from('players')
+        .select('id, full_name, position, sleeper_player_id')
+        .order('id')
+        .range(from, from + pageSize - 1);
+      unwrap('read players', error);
+
+      const page = data ?? [];
+      players.push(
+        ...page.map((row) => ({
+          id: String(row.id),
+          fullName: String(row.full_name),
+          position: String(row.position),
+          sleeperPlayerId: (row.sleeper_player_id as string | null) ?? null,
+        })),
+      );
+      if (page.length < pageSize) {
+        return players;
+      }
+    }
+  }
+
+  async readKeeperRights(seasonId: SeasonId): Promise<KeeperRight[]> {
+    const { data, error } = await this.client
+      .from('keeper_rights')
+      .select('id, season_id, franchise_id, player_id, source_type, nominal_round, confidence')
+      .eq('season_id', seasonId);
+    unwrap('read keeper rights', error);
+
+    return (data ?? []).map(
+      (row) =>
+        ({
+          id: row.id,
+          seasonId: row.season_id,
+          franchiseId: row.franchise_id,
+          playerId: row.player_id,
+          sourceType: row.source_type,
+          nominalRound: row.nominal_round,
+          effectiveOverallPick: null,
+          confidence: row.confidence,
+          manualOverrideReason: null,
+        }) as KeeperRight,
+    );
+  }
+
+  async readPickInventory(seasonId: SeasonId): Promise<DraftPickAsset[]> {
+    const { data, error } = await this.client
+      .from('draft_pick_assets')
+      .select(
+        'id, season_id, round, slot, overall_pick, original_franchise_id, current_franchise_id, ownership_confidence',
+      )
+      .eq('season_id', seasonId)
+      .order('overall_pick');
+    unwrap('read pick inventory', error);
+
+    return (data ?? []).map(
+      (row) =>
+        ({
+          id: row.id,
+          seasonId: row.season_id,
+          round: row.round,
+          slot: row.slot,
+          overallPick: row.overall_pick,
+          originalFranchiseId: row.original_franchise_id,
+          currentFranchiseId: row.current_franchise_id,
+          ownershipConfidence: row.ownership_confidence,
+        }) as DraftPickAsset,
+    );
+  }
+
   async countRows(table: string): Promise<number> {
     const { count, error } = await this.client
       .from(table)

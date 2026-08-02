@@ -13,7 +13,8 @@
     "import": "tsx src/import-league.ts",
     "keepers": "tsx src/keepers.ts",
     "sync": "tsx src/sync.ts",
-    "catalog": "tsx src/catalog.ts"
+    "catalog": "tsx src/catalog.ts",
+    "keeper-values": "tsx src/keeper-values.ts"
   },
   "dependencies": {
     "@keeper/domain": "*",
