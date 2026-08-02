@@ -6,7 +6,6 @@ import {
   importSeasonDraftState,
   reconstructKeeperRights,
   RECORDED_LEAGUE_POLICY,
-  type SleeperRawSnapshot,
 } from '@keeper/sleeper-adapter';
 import { createServiceClientFromEnv, KeeperRepository } from '@keeper/persistence';
 import type { LeagueId, SeasonId } from '@keeper/domain';
@@ -26,24 +25,65 @@ const sleeperLeagueId = resolveSleeperLeagueId(
 const leagueId = `league:${sleeperLeagueId}` as LeagueId;
 const seasonId = `season:${sleeperLeagueId}` as SeasonId;
 
+const repository = new KeeperRepository(createServiceClientFromEnv());
+
 // Raw payloads are captured as they arrive, before validation, so a response that later
 // fails a schema check is still on record.
-const capturedSnapshots: SleeperRawSnapshot[] = [];
+//
+// Collecting them in memory and writing at the end did not achieve that: a validation
+// error thrown mid-import exited before the write, and the malformed payload that caused it
+// was the one thing lost. That is exactly backwards -- the run that fails is the run whose
+// payloads someone needs. They are flushed as they arrive instead.
+//
+// A failed flush must not abort the import it is only observing, so it is reported and the
+// import continues.
+let snapshotCount = 0;
+const pendingSnapshotWrites: Promise<void>[] = [];
+
 const adapter = createSleeperAdapter({
   snapshotSink: (snapshot) => {
-    capturedSnapshots.push(snapshot);
+    pendingSnapshotWrites.push(
+      repository
+        .saveRawSnapshots([
+          {
+            mapperVersion: snapshot.mapperVersion,
+            endpoint: snapshot.endpoint,
+            url: snapshot.url,
+            fetchedAt: snapshot.fetchedAt,
+            payload: snapshot.raw,
+          },
+        ])
+        .then(() => {
+          snapshotCount += 1;
+        })
+        .catch((error: unknown) => {
+          console.warn(
+            `  Could not persist the ${snapshot.endpoint} snapshot: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }),
+    );
   },
 });
 
-const repository = new KeeperRepository(createServiceClientFromEnv());
-
 console.log(`Importing league ${sleeperLeagueId}...`);
-const imported = await importSeasonDraftState({
-  adapter,
-  leagueId,
-  seasonId,
-  sleeperLeagueId,
-});
+
+let imported: Awaited<ReturnType<typeof importSeasonDraftState>>;
+try {
+  imported = await importSeasonDraftState({
+    adapter,
+    leagueId,
+    seasonId,
+    sleeperLeagueId,
+  });
+} catch (error) {
+  // Whatever was captured before the failure is on record before the process leaves.
+  await Promise.all(pendingSnapshotWrites);
+  console.error(`
+Import failed after persisting ${snapshotCount} raw snapshot(s).`);
+  throw error;
+}
 
 const league = await adapter.getLeague(sleeperLeagueId);
 const rosters = await adapter.getLeagueRosters(sleeperLeagueId);
@@ -118,15 +158,7 @@ if (assumedFromPolicy.length > 0) {
 
 console.log('Persisting...');
 
-const snapshotCount = await repository.saveRawSnapshots(
-  capturedSnapshots.map((snapshot) => ({
-    mapperVersion: snapshot.mapperVersion,
-    endpoint: snapshot.endpoint,
-    url: snapshot.url,
-    fetchedAt: snapshot.fetchedAt,
-    payload: snapshot.raw,
-  })),
-);
+await Promise.all(pendingSnapshotWrites);
 
 await repository.saveLeagueSeason({
   leagueId,

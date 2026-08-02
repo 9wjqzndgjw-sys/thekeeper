@@ -13,6 +13,14 @@ export interface PlayerAssetEvent {
   fromFranchiseId: FranchiseId | null;
   /** Keeper or draft cost round, where the event has one. */
   costRound: number | null;
+  /**
+   * Surplus this one season produced, for a keeper event. Null for every other event type.
+   *
+   * Carried on the event rather than left to be reconstructed from the timeline total,
+   * because a player can change hands: dividing his lifetime surplus evenly across his
+   * keeper seasons credits both owners with the average instead of what each actually did.
+   */
+  keeperSurplus: number | null;
   overallPick: number | null;
   description: string;
 }
@@ -131,8 +139,11 @@ export function buildPlayerAssetTimeline(
   let originalAcquisition: PlayerAssetTimeline['originalAcquisition'] = null;
 
   for (const record of records) {
+    let acquisitionEvent: PlayerAssetEvent | null = null;
+
     if (record.acquisition !== null) {
-      events.push(buildAcquisitionEvent(record, record.acquisition));
+      acquisitionEvent = buildAcquisitionEvent(record, record.acquisition);
+      events.push(acquisitionEvent);
 
       if (originalAcquisition === null) {
         originalAcquisition = {
@@ -174,6 +185,9 @@ export function buildPlayerAssetTimeline(
 
       const surplus = seasonSurplus(record, diagnostics);
       cumulativeKeeperSurplus += surplus;
+      if (acquisitionEvent !== null) {
+        acquisitionEvent.keeperSurplus = surplus;
+      }
     } else if (record.costRound !== null && record.costRound !== undefined) {
       // A fresh acquisition resets the progression baseline.
       previousKeeperCostRound = record.costRound;
@@ -190,6 +204,7 @@ export function buildPlayerAssetTimeline(
         fromFranchiseId: null,
         costRound: null,
         overallPick: null,
+        keeperSurplus: null,
         description: `Dropped during ${record.seasonYear}.`,
       });
     }
@@ -203,6 +218,7 @@ export function buildPlayerAssetTimeline(
         fromFranchiseId: record.franchiseId,
         costRound: null,
         overallPick: null,
+        keeperSurplus: null,
         description: `Not kept for ${record.seasonYear}; returned to the draft pool.`,
       });
     }
@@ -238,6 +254,7 @@ function buildAcquisitionEvent(
     seasonYear: record.seasonYear,
     seasonId: record.seasonId,
     type: acquisition,
+    keeperSurplus: null,
     franchiseId: record.franchiseId,
     fromFranchiseId: record.fromFranchiseId ?? null,
     costRound: record.costRound ?? null,

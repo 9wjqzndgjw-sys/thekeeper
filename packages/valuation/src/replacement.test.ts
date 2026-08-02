@@ -189,10 +189,14 @@ describe('computeReplacementLevels', () => {
     expect(declared.QB).toBe(60);
   });
 
-  it('never reports a rostered player as the replacement level', () => {
-    // A team can hold someone worth less than the roster cutoff, so a rostered player can
-    // survive the cascade. He is still unavailable, and pricing draftable players against
-    // him would understate every one of them.
+  it('charges a rostered player against demand even when he is below the cutoff', () => {
+    // Two teams start one defence each, so the league rosters two. One is already held --
+    // badly, at 15 -- so the draft only has to fill the other, and the second best available
+    // defence is still on the wire.
+    //
+    // Ranking everyone together and handing slots to the best instead let a locked player
+    // below the cutoff consume nothing: the model kept expecting to draft a full complement
+    // and reported replacement a player too deep, at 10.
     const levels = computeReplacementLevels({
       candidates: candidates.filter((candidate) => candidate.position === 'DEF'),
       rosteredCandidates: [{ position: 'DEF', projectedPoints: 15 }],
@@ -200,8 +204,20 @@ describe('computeReplacementLevels', () => {
       teamCount: 2,
     });
 
-    // Starters take 40 and 20. What is left is the rostered 15 and the available 10.
-    expect(levels.DEF).toBe(10);
+    expect(levels.DEF).toBe(20);
+  });
+
+  it('never reports a rostered player as the replacement level', () => {
+    // Structural now rather than filtered: rostered players are charged against demand and
+    // never enter the pool the level is read from.
+    const levels = computeReplacementLevels({
+      candidates: [{ position: 'DEF', projectedPoints: 30 }],
+      rosteredCandidates: [{ position: 'DEF', projectedPoints: 99 }],
+      lineup: { ...lineup, qb: 0, rb: 0, wr: 0, te: 0, flex: 0, def: 0 },
+      teamCount: 2,
+    });
+
+    expect(levels.DEF).toBe(30);
   });
 
   it('produces a strictly lower (or equal) replacement level as bench spots increase', () => {

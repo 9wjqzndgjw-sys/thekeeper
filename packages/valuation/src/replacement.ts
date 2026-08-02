@@ -23,10 +23,11 @@ export interface ComputeReplacementLevelsInput {
    * quarter and inflated every value derived from it. During a live draft the error grows
    * with every pick made, which is exactly when the numbers are being trusted most.
    *
-   * They are ranked alongside `candidates` for slot assignment, so a kept player takes the
-   * slot his value actually earns: an elite back consumes a starting spot, a backup
-   * quarterback consumes a bench spot. Replacement is then the best player still
-   * available once demand is met.
+   * Each is charged against demand at his own position before the draft is modelled at all,
+   * so he consumes a roster spot whatever his value. Ranking them alongside the available
+   * players instead handed slots to the best and let a locked player below the cutoff
+   * consume nothing -- rostering a weak defence left the model still expecting to draft a
+   * full complement of them.
    */
   rosteredCandidates?: readonly ReplacementCandidate[];
   lineup: LineupSettings;
@@ -71,70 +72,128 @@ const STARTER_SLOT_BY_POSITION: Record<Position, keyof LineupSettings> = {
  * Players already rostered belong in `rosteredCandidates`, not omitted -- see that field.
  */
 export function computeReplacementLevels(input: ComputeReplacementLevelsInput): ReplacementLevels {
-  const { lineup, teamCount } = input;
-  const remainingByPosition = groupSortedByPosition(input.candidates, input.rosteredCandidates);
+  // Only the available players compete for what is left. Rostered players are held out and
+  // charged against demand below, because they occupy a roster spot whatever their value.
+  const remainingByPosition = groupSortedByPosition(input.candidates);
+
+  // What the league still has to fill after the locked players are counted.
+  const demand = demandAfterRostered(input);
 
   // Dedicated starters come off first.
   for (const position of positions()) {
-    take(remainingByPosition, position, lineup[STARTER_SLOT_BY_POSITION[position]] * teamCount);
+    take(remainingByPosition, position, demand.starters[position] ?? 0);
   }
 
   // Then flex, filled by the best remaining flex-eligible players.
   takeAcrossPositions(
     remainingByPosition,
     FLEX_ELIGIBLE_POSITIONS,
-    lineup.flex * teamCount,
+    demand.flex,
     (position, points) => points,
   );
 
-  // The yardstick for the bench pass counts every player still in the pool, rostered or
-  // not. It measures how much better a player is than the next one at his position, which
-  // is a fact about the talent pool -- skipping rostered players here would move the
-  // yardstick according to who happens to be held, and replacement would then depend on
-  // declarations after all.
-  const preliminary = readReplacementLevels(remainingByPosition, { availableOnly: false });
+  // The yardstick for the bench pass: how much better a player is than the next one at his
+  // position. Every entry left here is available, since the rostered ones were charged
+  // against demand rather than mixed into the pool.
+  const preliminary = readReplacementLevels(remainingByPosition);
 
   // Finally bench, ranked by value over the preliminary replacement rather than by points.
   takeAcrossPositions(
     remainingByPosition,
     positions(),
-    lineup.bench * teamCount,
+    demand.bench,
     (position, points) => points - (preliminary[position] ?? 0),
-    resolveBenchCaps(input),
+    demand.benchCaps,
   );
 
   return readReplacementLevels(remainingByPosition);
+}
+
+/**
+ * Roster demand left for the draft once every already-rostered player is charged against it.
+ *
+ * A rostered player occupies a roster spot regardless of how good he is, and that is the
+ * part the previous approach got wrong. It ranked everyone together and handed slots to the
+ * best, so a locked player who fell below the cutoff consumed nothing: rostering a weak
+ * defence left the model still expecting to draft a full complement of them, and
+ * replacement came out a player too deep. Charging demand first fixes it in the direction
+ * that matters -- fewer slots left to fill means a better player is still on the wire.
+ *
+ * Each rostered player is charged to a dedicated slot at his position first, then to flex if
+ * he is eligible, then to the bench. The per-position bench caps are reduced alongside,
+ * since a cap exists to stop the model over-allocating hypothetical bench spots and has no
+ * business denying one that is demonstrably already occupied.
+ */
+function demandAfterRostered(input: ComputeReplacementLevelsInput): {
+  starters: Partial<Record<Position, number>>;
+  flex: number;
+  bench: number;
+  benchCaps: Partial<Record<Position, number>>;
+} {
+  const { lineup, teamCount } = input;
+
+  const rosteredByPosition = new Map<Position, number>();
+  for (const candidate of input.rosteredCandidates ?? []) {
+    rosteredByPosition.set(
+      candidate.position,
+      (rosteredByPosition.get(candidate.position) ?? 0) + 1,
+    );
+  }
+
+  const starters: Partial<Record<Position, number>> = {};
+  const unplaced = new Map<Position, number>();
+
+  for (const position of positions()) {
+    const capacity = lineup[STARTER_SLOT_BY_POSITION[position]] * teamCount;
+    const rostered = rosteredByPosition.get(position) ?? 0;
+    const used = Math.min(rostered, capacity);
+    starters[position] = capacity - used;
+    unplaced.set(position, rostered - used);
+  }
+
+  let flex = lineup.flex * teamCount;
+  for (const position of FLEX_ELIGIBLE_POSITIONS) {
+    const used = Math.min(unplaced.get(position) ?? 0, flex);
+    flex -= used;
+    unplaced.set(position, (unplaced.get(position) ?? 0) - used);
+  }
+
+  const benchCaps = resolveBenchCaps(input);
+  let bench = lineup.bench * teamCount;
+
+  for (const position of positions()) {
+    const used = Math.min(unplaced.get(position) ?? 0, bench);
+    bench -= used;
+    unplaced.set(position, (unplaced.get(position) ?? 0) - used);
+
+    const cap = benchCaps[position];
+    if (cap !== undefined) {
+      benchCaps[position] = Math.max(0, cap - used);
+    }
+  }
+
+  return { starters, flex, bench, benchCaps };
 }
 
 function positions(): Position[] {
   return Object.keys(STARTER_SLOT_BY_POSITION) as Position[];
 }
 
-/**
- * One player in the pool. `available` is false for someone already rostered: they still
- * compete for a roster slot, but cannot themselves be a replacement.
- */
+/** One acquirable player in the pool. Rostered players are charged against demand instead. */
 interface PoolEntry {
   points: number;
-  available: boolean;
 }
 
 function groupSortedByPosition(
   candidates: readonly ReplacementCandidate[],
-  rosteredCandidates: readonly ReplacementCandidate[] = [],
 ): Map<Position, PoolEntry[]> {
-  const pool = [
-    ...candidates.map((candidate) => ({ candidate, available: true })),
-    ...rosteredCandidates.map((candidate) => ({ candidate, available: false })),
-  ];
-
   const byPosition = new Map<Position, PoolEntry[]>();
   for (const position of positions()) {
     byPosition.set(
       position,
-      pool
-        .filter((entry) => entry.candidate.position === position)
-        .map((entry) => ({ points: entry.candidate.projectedPoints, available: entry.available }))
+      candidates
+        .filter((candidate) => candidate.position === position)
+        .map((candidate) => ({ points: candidate.projectedPoints }))
         .sort((left, right) => right.points - left.points),
     );
   }
@@ -210,31 +269,22 @@ function takeAcrossPositions(
  * team keeps someone worth less than a bench spot, say -- and must not then be reported as
  * the level a draftable player is measured against.
  */
-function best(
-  remaining: ReadonlyMap<Position, PoolEntry[]>,
-  position: Position,
-  availableOnly: boolean,
-): number {
-  const entries = remaining.get(position) ?? [];
-  return (availableOnly ? entries.find((entry) => entry.available) : entries[0])?.points ?? 0;
+function best(remaining: ReadonlyMap<Position, PoolEntry[]>, position: Position): number {
+  return remaining.get(position)?.[0]?.points ?? 0;
 }
 
-function readReplacementLevels(
-  remaining: ReadonlyMap<Position, PoolEntry[]>,
-  options: { availableOnly: boolean } = { availableOnly: true },
-): ReplacementLevels {
-  const { availableOnly } = options;
+function readReplacementLevels(remaining: ReadonlyMap<Position, PoolEntry[]>): ReplacementLevels {
   const levels: ReplacementLevels = {};
 
   for (const position of positions()) {
     if (!FLEX_ELIGIBLE_POSITIONS.includes(position)) {
-      levels[position] = best(remaining, position, availableOnly);
+      levels[position] = best(remaining, position);
     }
   }
 
   const bestFlexEligible = Math.max(
     0,
-    ...FLEX_ELIGIBLE_POSITIONS.map((position) => best(remaining, position, availableOnly)),
+    ...FLEX_ELIGIBLE_POSITIONS.map((position) => best(remaining, position)),
   );
   for (const position of FLEX_ELIGIBLE_POSITIONS) {
     levels[position] = bestFlexEligible;

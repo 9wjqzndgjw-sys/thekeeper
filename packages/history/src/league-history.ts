@@ -58,12 +58,14 @@ export function buildLeagueHistory(input: BuildLeagueHistoryInput): LeagueHistor
         players: new Map(),
       };
 
-      // Split the player's total evenly across his keeper seasons, so a franchise that held
-      // him for two of four seasons is credited with the half it actually ran.
-      const perSeasonSurplus =
-        timeline.keeperSeasons === 0
-          ? 0
-          : timeline.cumulativeKeeperSurplus / timeline.keeperSeasons;
+      // The surplus this franchise actually produced that season, taken from the event.
+      //
+      // Dividing the player's lifetime total evenly across his keeper seasons looked
+      // equivalent and is not: a player worth 90 under one owner and 10 under the next
+      // credits both with 50, moving 40 points of record from the manager who earned it to
+      // the one who did not. Even splits are only right when every season was identical,
+      // which is exactly the case a test using equal values cannot tell apart.
+      const perSeasonSurplus = event.keeperSurplus ?? 0;
 
       entry.surplus += perSeasonSurplus;
       entry.keeperSeasons += 1;

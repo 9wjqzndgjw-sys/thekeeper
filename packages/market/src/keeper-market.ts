@@ -105,7 +105,8 @@ export interface DraftRemovalInputs {
   ownerFranchiseId: FranchiseId;
   /** True when the player is in his owner's current best keeper set. */
   inOwnerBestSet: boolean;
-  marginalValueToOwner: number;
+  /** Null when the owner is keeping him, where the figure is not computed. */
+  marginalValueToOwner: number | null;
   bestRivalGain: number;
   interestedRivalCount: number;
   /**
@@ -261,7 +262,16 @@ function assessSellPressure(
         buyerDisplayName: franchise.displayName,
         marginalValueToBuyer: marginal,
         gainOverCurrentOwner: marginal - candidate.marginalValueToOwner,
-        buyerKeeperDemand: Math.max(0, input.keeperLimit - buyerRights.length),
+        // Open keeper slots, measured against what the buyer would actually keep rather
+        // than how many players he has. A keeper right exists for every rostered player, so
+        // counting rights reported that a sixteen player roster had already used sixteen of
+        // its three slots and nobody in the league had room for anyone.
+        buyerKeeperDemand: Math.max(
+          0,
+          input.keeperLimit -
+            (optimizationByFranchise.get(franchise.id)?.bestByMode.expected?.selectedKeeperRightIds
+              .length ?? 0),
+        ),
       };
     })
     .filter((fit) => fit.gainOverCurrentOwner > 0)
@@ -325,7 +335,11 @@ function buildDraftRemovalInputs(
       fullName: playersById.get(right.playerId)?.fullName ?? String(right.playerId),
       ownerFranchiseId: right.franchiseId,
       inOwnerBestSet: inBestSet,
-      marginalValueToOwner: excess?.marginalValueToOwner ?? (inBestSet ? Number.NaN : 0),
+      // Null, not NaN, when the owner keeps him: his marginal value is the loss from
+      // dropping him out of a set he is already in, which this pass does not compute. NaN
+      // was the worse of the two, since it poisons any arithmetic downstream and serializes
+      // to null anyway -- an unknown that looks like a number until it ruins a total.
+      marginalValueToOwner: excess?.marginalValueToOwner ?? (inBestSet ? null : 0),
       bestRivalGain,
       interestedRivalCount: assessment?.buyerFits.length ?? 0,
       outlook: resolveOutlook(position === undefined, inBestSet, bestRivalGain),

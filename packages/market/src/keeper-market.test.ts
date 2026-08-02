@@ -186,3 +186,39 @@ function position(
   expect(found).toBeDefined();
   return found!;
 }
+
+describe('market output hygiene', () => {
+  // Both of these produced values that looked fine in isolation and were wrong in use.
+  it('reports no NaN anywhere in the analysis', () => {
+    // NaN is the worst kind of unknown: it survives every arithmetic operation, poisons
+    // whatever it touches, and serializes to null so it disappears before anyone sees it.
+    const analysis = analyzeKeeperMarket(baseInput());
+    const serialized = JSON.stringify(analysis, (_key, value) =>
+      typeof value === 'number' && Number.isNaN(value) ? '__NaN__' : value,
+    );
+
+    expect(serialized).not.toContain('__NaN__');
+  });
+
+  it('says a kept player has no computed marginal value rather than a broken one', () => {
+    const analysis = analyzeKeeperMarket(baseInput());
+    const kept = analysis.draftRemovalInputs.filter((row) => row.inOwnerBestSet);
+
+    expect(kept.length).toBeGreaterThan(0);
+    for (const row of kept) {
+      expect(row.marginalValueToOwner).toBeNull();
+    }
+  });
+
+  it('leaves a buyer room when he is keeping fewer than the limit', () => {
+    // Demand was counted from every keeper right, and a right now exists for every rostered
+    // player -- so a full roster reported zero open slots and no trade ever had a buyer.
+    const analysis = analyzeKeeperMarket(baseInput());
+    const demands = analysis.sellPressure.flatMap((entry) =>
+      entry.buyerFits.map((fit) => fit.buyerKeeperDemand),
+    );
+
+    expect(demands.length).toBeGreaterThan(0);
+    expect(Math.max(...demands)).toBeGreaterThan(0);
+  });
+});

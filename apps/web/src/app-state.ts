@@ -326,6 +326,15 @@ function createTracker(snapshot: LeagueStateSnapshot): DraftTracker {
       {
         getDraftPicks: async (id: string) => {
           const response = await adapter.getDraftPicks(id);
+
+          // A stale read is a failed refresh wearing the last good answer. The adapter
+          // serves it deliberately so a blip does not empty the board, but returning it
+          // here would refresh the tracker's success timestamp and keep the header reading
+          // "synced 2s ago" throughout an outage. The tracker already holds this exact
+          // data, so nothing is lost by reporting the failure instead.
+          if (response.cache === 'stale') {
+            throw new Error('Sleeper did not respond; showing the last successful sync.');
+          }
           return { data: response.data as unknown as SleeperDraftPickLike[] };
         },
       },

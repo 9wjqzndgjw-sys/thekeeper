@@ -36,6 +36,32 @@ describe('buildLeagueHistory', () => {
     expect(history.franchises.map((entry) => entry.franchiseId)).toEqual([alpha, beta]);
   });
 
+  it('credits each owner what his own seasons were worth, not the average', () => {
+    // The case an even split cannot distinguish, and the reason the test above passes under
+    // both behaviours: its seasons are identical. Here one owner produced 90 and the next
+    // 10, so splitting the lifetime total evenly would report 50 apiece and move 40 points
+    // of record from the manager who earned it to the one who did not.
+    const history = buildLeagueHistory({
+      timelines: [
+        timeline('player-shared', 'Traded Keeper', [
+          kept(2024, alpha, 6, 190, 100),
+          kept(2025, beta, 5, 110, 100),
+        ]),
+      ],
+    });
+
+    const alphaSummary = history.franchises.find((entry) => entry.franchiseId === alpha)!;
+    const betaSummary = history.franchises.find((entry) => entry.franchiseId === beta)!;
+
+    expect(alphaSummary.cumulativeKeeperSurplus).toBeCloseTo(90);
+    expect(betaSummary.cumulativeKeeperSurplus).toBeCloseTo(10);
+    expect(alphaSummary.cumulativeKeeperSurplus).not.toBeCloseTo(
+      betaSummary.cumulativeKeeperSurplus,
+    );
+    // The league total is unchanged; only its attribution was wrong.
+    expect(history.totalKeeperSurplus).toBeCloseTo(100);
+  });
+
   it('credits each franchise only for the seasons it held him', () => {
     // Four keeper seasons split evenly, two under each owner.
     const history = buildLeagueHistory({

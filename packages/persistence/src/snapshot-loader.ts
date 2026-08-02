@@ -85,6 +85,7 @@ export async function loadLeagueSnapshot(
   const projectedByPlayerId = new Map(
     playerSeasonRows.map((row) => [row.playerId, row.projectedPoints]),
   );
+  const nameByPlayerId = new Map(catalog.map((player) => [player.id, player.fullName]));
   const players: Player[] = catalog
     .filter((player) => projectedByPlayerId.has(player.id))
     .map((player) => ({
@@ -121,6 +122,30 @@ export async function loadLeagueSnapshot(
     caveats.push(
       'This season predates stored league rules, so keeper limits fall back to defaults. ' +
         'Re-run the import to record them.',
+    );
+  }
+
+  // A rostered player with no projection cannot be valued, so he is left out of the board
+  // and out of every keeper set. That is the right call -- scoring him zero would rank him
+  // as a uniquely terrible keeper -- but it has to be said out loud. One unmatched star
+  // silently absent from a recommendation is indistinguishable from the engine deciding
+  // against him.
+  const unprojectedCandidates = [
+    ...new Set(
+      keeperRights
+        .map((right) => String(right.playerId))
+        .filter((playerId) => !projectedByPlayerId.has(playerId)),
+    ),
+  ];
+
+  if (unprojectedCandidates.length > 0) {
+    const named = unprojectedCandidates
+      .map((playerId) => nameByPlayerId.get(playerId) ?? playerId)
+      .sort();
+    const shown = named.slice(0, 8).join(', ');
+    caveats.push(
+      `${named.length} rostered player(s) have no projection and are left out of every ` +
+        `board and keeper set: ${shown}${named.length > 8 ? ', and others' : ''}.`,
     );
   }
 
