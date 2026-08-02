@@ -122,6 +122,7 @@ export const surplusKeeperRights: KeeperRight[] = specs.map((spec) => ({
   franchiseId: spec.franchiseId,
   sourceType: 'kept',
   nominalRound: spec.nominalRound,
+  priorSeasonRound: null,
   effectiveOverallPick: null,
   confidence: 'confirmed',
   manualOverrideReason: null,

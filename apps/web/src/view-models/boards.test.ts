@@ -42,7 +42,12 @@ const baseInput = {
   seasonId,
   franchiseId,
   projectionSource: createProjectionSourceFromPlayerSeasons(playerSeasons),
-  pickValueCurve: createPickValueCurveFromRankedValues(Array.from({ length: 30 }, () => 10)),
+  pickValueCurveIgnoringDeclarations: createPickValueCurveFromRankedValues(
+    Array.from({ length: 30 }, () => 10),
+  ),
+  pickValueCurveAssumingDeclarations: createPickValueCurveFromRankedValues(
+    Array.from({ length: 30 }, () => 10),
+  ),
   lineup,
   teamCount: 1,
 };
@@ -119,6 +124,7 @@ function keeperRight(playerId: string, id = 'keeper-1', nominalRound = 4): Keepe
     franchiseId,
     sourceType: 'kept',
     nominalRound,
+    priorSeasonRound: null,
     effectiveOverallPick: null,
     confidence: 'confirmed',
     manualOverrideReason: null,

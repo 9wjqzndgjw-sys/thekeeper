@@ -4,6 +4,10 @@ import type { FranchiseId, KeeperRightId, PlayerId, SeasonId } from './ids.js';
 export type KeeperRightSourceType =
   'drafted' | 'kept' | 'undrafted_free_agent' | 'traded' | 'manual_override';
 
+/**
+ * What it would cost a franchise to keep one player: a possibility, not a choice. Every
+ * rostered player has one. What a manager actually declared is a `KeeperDecision`.
+ */
 export interface KeeperRight {
   id: KeeperRightId;
   seasonId: SeasonId;
@@ -11,6 +15,8 @@ export interface KeeperRight {
   franchiseId: FranchiseId;
   sourceType: KeeperRightSourceType;
   nominalRound: number;
+  /** The round this player went in last season, or null if he was never drafted. */
+  priorSeasonRound: number | null;
   effectiveOverallPick: number | null;
   confidence: OwnershipConfidence;
   manualOverrideReason: string | null;

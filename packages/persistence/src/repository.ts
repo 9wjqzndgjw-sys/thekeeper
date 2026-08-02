@@ -364,28 +364,33 @@ export class KeeperRepository {
     return picks.length;
   }
 
-  async saveKeeperRights(rights: readonly KeeperRight[]): Promise<number> {
-    if (rights.length === 0) {
-      return 0;
+  /**
+   * One row per rostered player, so this now runs to hundreds rather than dozens and is
+   * batched like the catalog.
+   */
+  async saveKeeperRights(rights: readonly KeeperRight[], batchSize = 500): Promise<number> {
+    for (let start = 0; start < rights.length; start += batchSize) {
+      const batch = rights.slice(start, start + batchSize);
+      unwrap(
+        `keeper_rights [${start}-${start + batch.length}]`,
+        (
+          await this.client.from('keeper_rights').upsert(
+            batch.map((right) => ({
+              id: right.id,
+              season_id: right.seasonId,
+              franchise_id: right.franchiseId,
+              player_id: right.playerId,
+              source_type: right.sourceType,
+              nominal_round: right.nominalRound,
+              prior_season_round: right.priorSeasonRound,
+              confidence: right.confidence,
+              manual_override_reason: right.manualOverrideReason,
+            })),
+            { onConflict: 'id' },
+          )
+        ).error,
+      );
     }
-    unwrap(
-      'keeper_rights',
-      (
-        await this.client.from('keeper_rights').upsert(
-          rights.map((right) => ({
-            id: right.id,
-            season_id: right.seasonId,
-            franchise_id: right.franchiseId,
-            player_id: right.playerId,
-            source_type: right.sourceType,
-            nominal_round: right.nominalRound,
-            confidence: right.confidence,
-            manual_override_reason: right.manualOverrideReason,
-          })),
-          { onConflict: 'id' },
-        )
-      ).error,
-    );
     return rights.length;
   }
 
@@ -440,27 +445,68 @@ export class KeeperRepository {
     }
   }
 
-  async readKeeperRights(seasonId: SeasonId): Promise<KeeperRight[]> {
-    const { data, error } = await this.client
-      .from('keeper_rights')
-      .select('id, season_id, franchise_id, player_id, source_type, nominal_round, confidence')
-      .eq('season_id', seasonId);
-    unwrap('read keeper rights', error);
+  /**
+   * Every keeper right for a season: one per rostered player, not one per declaration.
+   * Paged, because a twelve team league carries close to two hundred of them.
+   */
+  async readKeeperRights(seasonId: SeasonId, pageSize = 1000): Promise<KeeperRight[]> {
+    const rights: KeeperRight[] = [];
 
-    return (data ?? []).map(
-      (row) =>
-        ({
-          id: row.id,
-          seasonId: row.season_id,
-          franchiseId: row.franchise_id,
-          playerId: row.player_id,
-          sourceType: row.source_type,
-          nominalRound: row.nominal_round,
-          effectiveOverallPick: null,
-          confidence: row.confidence,
-          manualOverrideReason: null,
-        }) as KeeperRight,
-    );
+    for (let from = 0; ; from += pageSize) {
+      const { data, error } = await this.client
+        .from('keeper_rights')
+        .select(
+          'id, season_id, franchise_id, player_id, source_type, nominal_round, ' +
+            'prior_season_round, confidence, manual_override_reason',
+        )
+        .eq('season_id', seasonId)
+        .order('id')
+        .range(from, from + pageSize - 1);
+      unwrap('read keeper rights', error);
+
+      const page = (data ?? []) as unknown as Record<string, unknown>[];
+      rights.push(
+        ...page.map(
+          (row) =>
+            ({
+              id: row.id,
+              seasonId: row.season_id,
+              franchiseId: row.franchise_id,
+              playerId: row.player_id,
+              sourceType: row.source_type,
+              nominalRound: row.nominal_round,
+              priorSeasonRound: (row.prior_season_round as number | null) ?? null,
+              effectiveOverallPick: null,
+              confidence: row.confidence,
+              manualOverrideReason: (row.manual_override_reason as string | null) ?? null,
+            }) as KeeperRight,
+        ),
+      );
+      if (page.length < pageSize) {
+        return rights;
+      }
+    }
+  }
+
+  /** What managers actually declared, which is a different thing from what they could. */
+  async readKeeperDecisions(seasonId: SeasonId): Promise<KeeperDecisionRecord[]> {
+    const { data, error } = await this.client
+      .from('keeper_decisions')
+      .select(
+        'season_id, franchise_id, player_id, keeper_right_id, resolved_pick_asset_id, source, declared_at',
+      )
+      .eq('season_id', seasonId);
+    unwrap('read keeper decisions', error);
+
+    return (data ?? []).map((row) => ({
+      seasonId: String(row.season_id) as SeasonId,
+      franchiseId: String(row.franchise_id),
+      playerId: String(row.player_id),
+      keeperRightId: (row.keeper_right_id as string | null) ?? null,
+      resolvedPickAssetId: (row.resolved_pick_asset_id as string | null) ?? null,
+      source: row.source as KeeperDecisionRecord['source'],
+      declaredAt: (row.declared_at as string | null) ?? null,
+    }));
   }
 
   async readPickInventory(seasonId: SeasonId): Promise<DraftPickAsset[]> {

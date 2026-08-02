@@ -27,6 +27,12 @@ export interface LoadedLeagueSnapshot {
   snapshot: LeagueStateSnapshot;
   /** Every player the catalog knows, for the boards. */
   players: Player[];
+  /**
+   * Players some franchise has actually declared. `snapshot.keeperRights` holds every
+   * player who *could* be kept, so this is what says which of them were chosen -- and it is
+   * the set that decides what leaves the draft pool.
+   */
+  declaredPlayerIds: Set<string>;
   /** Things a reader should know about this data, in plain words. */
   caveats: string[];
 }
@@ -53,13 +59,17 @@ export async function loadLeagueSnapshot(
     );
   }
 
-  const [franchises, keeperRights, pickInventory, catalog, playerSeasonRows] = await Promise.all([
-    repository.readFranchises(input.seasonId),
-    repository.readKeeperRights(input.seasonId),
-    repository.readPickInventory(input.seasonId),
-    repository.readAllPlayers(),
-    repository.readPlayerSeasons(input.seasonId),
-  ]);
+  const [franchises, keeperRights, decisions, pickInventory, catalog, playerSeasonRows] =
+    await Promise.all([
+      repository.readFranchises(input.seasonId),
+      repository.readKeeperRights(input.seasonId),
+      repository.readKeeperDecisions(input.seasonId),
+      repository.readPickInventory(input.seasonId),
+      repository.readAllPlayers(),
+      repository.readPlayerSeasons(input.seasonId),
+    ]);
+
+  const declaredPlayerIds = new Set(decisions.map((decision) => decision.playerId));
 
   const caveats: string[] = [];
 
@@ -113,12 +123,17 @@ export async function loadLeagueSnapshot(
     );
   }
 
-  // Rosters and completed selections are not imported yet. They are left empty rather than
-  // approximated, and the boards that would use them say so.
-  caveats.push('Rosters and completed draft selections are not imported yet.');
+  if (keeperRights.length > 0 && declaredPlayerIds.size === 0) {
+    caveats.push('No keeper has been declared yet, so both valuations are the same.');
+  }
+
+  // Completed selections are not imported yet. Rosters are covered: a keeper right exists
+  // for every rostered player, which is the same information the engine needs.
+  caveats.push('Completed draft selections are not imported yet.');
 
   return {
     players,
+    declaredPlayerIds,
     caveats,
     snapshot: {
       league: {

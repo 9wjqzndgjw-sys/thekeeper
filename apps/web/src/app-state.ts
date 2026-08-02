@@ -10,25 +10,36 @@ import {
   type KeeperOptimizationResult,
 } from '@keeper/keeper-optimizer';
 import {
-  computeIntrinsicValue,
-  computeReplacementLevels,
-  createPickValueCurveFromRankedValues,
+  buildDeclarationScenarios,
   createSnapshotProjectionSource,
+  type DeclarationScenarios,
   type PickValueCurve,
   type ProjectionSource,
-  type ReplacementLevels,
 } from '@keeper/valuation';
 import { createAnonClient, loadLeagueSnapshot } from '@keeper/persistence';
 import { createSleeperAdapter } from '@keeper/sleeper-adapter';
 import { createSyntheticLeagueSnapshot, players as fixturePlayers } from '@keeper/test-fixtures';
 
+/**
+ * A franchise's keeper answer under both readings of the league.
+ *
+ * `floor` assumes nothing about anyone else's declarations; `assumingDeclarations` takes
+ * them at face value. A set that wins under both is not borrowing its value from twelve
+ * other managers' choices.
+ */
+export interface FranchiseOutlook {
+  floor: KeeperOptimizationResult;
+  assumingDeclarations: KeeperOptimizationResult;
+}
+
 export interface AppContext {
   snapshot: LeagueStateSnapshot;
   players: Player[];
   projectionSource: ProjectionSource;
-  pickValueCurve: PickValueCurve;
-  replacementLevels: ReplacementLevels;
-  optimization: KeeperOptimizationResult;
+  scenarios: DeclarationScenarios;
+  /** Players some franchise has declared. Drives which pool each board is priced against. */
+  declaredPlayerIds: Set<string>;
+  optimization: FranchiseOutlook;
   tracker: DraftTracker;
   /** Where this league came from, and anything a reader should discount. */
   source: 'database' | 'fixture';
@@ -48,6 +59,7 @@ export interface AppContext {
 export function createAppContext(input: {
   snapshot: LeagueStateSnapshot;
   players: readonly Player[];
+  declaredPlayerIds?: Iterable<string>;
   source: AppContext['source'];
   caveats?: readonly string[];
 }): AppContext {
@@ -58,43 +70,27 @@ export function createAppContext(input: {
   const projectedFor = (player: Player): number =>
     projectionSource.getProjectedPoints(player.id, snapshot.season.id) ?? 0;
 
-  // Declared keepers are already on a roster: they take a player and the slot he fills off
-  // the board together, so they count toward demand rather than being dropped from supply.
-  const declaredPlayerIds = new Set(snapshot.keeperRights.map((right) => String(right.playerId)));
-  const asCandidate = (player: Player) => ({
-    position: player.position as Position,
-    projectedPoints: projectedFor(player),
-  });
-  const draftable = players.filter((player) => !declaredPlayerIds.has(String(player.id)));
+  // A declaration is what a manager chose; a keeper right is only what a player would cost.
+  // Every rostered player has a right, so reading declarations off the rights would take
+  // whole rosters out of the draft pool.
+  const declaredPlayerIds = new Set(input.declaredPlayerIds ?? []);
 
-  const replacementLevels = computeReplacementLevels({
-    candidates: draftable.map(asCandidate),
-    rosteredCandidates: players.filter((p) => declaredPlayerIds.has(String(p.id))).map(asCandidate),
+  const scenarios = buildDeclarationScenarios({
+    candidates: players.map((player) => ({
+      position: player.position as Position,
+      projectedPoints: projectedFor(player),
+      declared: declaredPlayerIds.has(String(player.id)),
+    })),
     lineup: snapshot.league.lineup,
     teamCount: snapshot.league.rules.teamCount,
   });
-
-  // One player leaves the pool per pick, so the draftable pool ranked by value gives what
-  // pick N can buy. Ranking by projected points instead would price a quarterback's raw
-  // total against a running back's, and ranking by ADP produces a curve that rises.
-  const pickValueCurve = createPickValueCurveFromRankedValues(
-    draftable
-      .map(
-        (player) =>
-          computeIntrinsicValue({
-            projectedPoints: projectedFor(player),
-            replacementLevel: replacementLevels[player.position] ?? 0,
-          }).intrinsicValue,
-      )
-      .sort((left, right) => right - left),
-  );
 
   const context: Omit<AppContext, 'optimization'> = {
     snapshot,
     players,
     projectionSource,
-    pickValueCurve,
-    replacementLevels,
+    scenarios,
+    declaredPlayerIds,
     source: input.source,
     caveats: [...(input.caveats ?? [])],
     tracker: createTracker(snapshot),
@@ -111,21 +107,35 @@ export function createAppContext(input: {
 export function optimizeForFranchise(
   context: Omit<AppContext, 'optimization'>,
   franchiseId: FranchiseId,
-): KeeperOptimizationResult {
+): FranchiseOutlook {
   const { snapshot } = context;
-  return optimizeKeeperCombinations({
-    keeperRights: snapshot.keeperRights,
-    pickInventory: snapshot.pickInventory,
-    players: context.players,
-    franchiseId,
-    seasonId: snapshot.season.id,
-    evaluatedAt: snapshot.evaluatedAt,
-    projectionSource: context.projectionSource,
-    replacementLevels: context.replacementLevels,
-    pickValueCurve: context.pickValueCurve,
-    maxKeepers: snapshot.league.rules.maxKeepers,
-    rulesVersion: snapshot.league.rulesVersion,
-  });
+
+  // A candidate with no projection cannot be valued, and the optimizer refuses to guess
+  // rather than scoring him zero. Those are left out here; the loader reports the count.
+  const projected = new Set(context.players.map((player) => String(player.id)));
+  const keeperRights = snapshot.keeperRights.filter((right) =>
+    projected.has(String(right.playerId)),
+  );
+
+  const run = (pickValueCurve: PickValueCurve) =>
+    optimizeKeeperCombinations({
+      keeperRights,
+      pickInventory: snapshot.pickInventory,
+      players: context.players,
+      franchiseId,
+      seasonId: snapshot.season.id,
+      evaluatedAt: snapshot.evaluatedAt,
+      projectionSource: context.projectionSource,
+      replacementLevels: context.scenarios.replacementLevels,
+      pickValueCurve,
+      maxKeepers: snapshot.league.rules.maxKeepers,
+      rulesVersion: snapshot.league.rulesVersion,
+    });
+
+  return {
+    floor: run(context.scenarios.ignoringDeclarations),
+    assumingDeclarations: run(context.scenarios.assumingDeclarations),
+  };
 }
 
 /**
@@ -158,6 +168,7 @@ export async function loadAppContext(
   return createAppContext({
     snapshot: loaded.snapshot,
     players: loaded.players,
+    declaredPlayerIds: loaded.declaredPlayerIds,
     caveats: loaded.caveats,
     source: 'database',
   });
@@ -168,9 +179,12 @@ export async function loadAppContext(
  * clearly labelled so a fixture is never mistaken for a real recommendation.
  */
 export function createFixtureAppContext(): AppContext {
+  const snapshot = createSyntheticLeagueSnapshot();
   return createAppContext({
-    snapshot: createSyntheticLeagueSnapshot(),
+    snapshot,
     players: fixturePlayers,
+    // The fixture carries no separate decision list, so its rights stand in as declarations.
+    declaredPlayerIds: snapshot.keeperRights.map((right) => String(right.playerId)),
     source: 'fixture',
     caveats: ['This is synthetic demonstration data, not your league.'],
   });

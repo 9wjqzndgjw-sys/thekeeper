@@ -6,3 +6,4 @@ export * from './keeper-surplus-value.js';
 export * from './team-context-value.js';
 export * from './valuate.js';
 export * from './scoring.js';
+export * from './declaration-scenarios.js';

@@ -56,7 +56,8 @@ const franchiseMap = buildFranchiseMap({
 });
 
 // Keeper costs come from the previous season's draft, so the chain has to be followed.
-let keeperRights: Awaited<ReturnType<typeof reconstructKeeperRights>>['keeperRights'] = [];
+let keeperRights: ReturnType<typeof reconstructKeeperRights>['keeperRights'] = [];
+let declaredSleeperPlayerIds: string[] = [];
 const priorLeagueId = league.data.previousSleeperLeagueId;
 const playerNames: Record<string, string> = {};
 
@@ -72,14 +73,21 @@ if (priorLeagueId) {
           `${metadata.first_name} ${metadata.last_name ?? ''}`.trim();
       }
     }
-    keeperRights = reconstructKeeperRights({
+    const reconstructed = reconstructKeeperRights({
       seasonId,
       rosters: rosters.data,
       rosterIdToFranchiseId: franchiseMap.rosterIdToFranchiseId,
       priorSeasonSelections: priorPicks.data,
-      undraftedKeeperRound: 10,
+      undraftedKeeperRound: RECORDED_LEAGUE_POLICY.undraftedKeeperRound,
+      costAdvancePerSeason: RECORDED_LEAGUE_POLICY.keeperCostAdvancePerSeason,
       playerNameBySleeperId: playerNames,
-    }).keeperRights;
+    });
+    keeperRights = reconstructed.keeperRights;
+    declaredSleeperPlayerIds = reconstructed.declaredSleeperPlayerIds;
+
+    for (const diagnostic of reconstructed.diagnostics) {
+      console.warn(`  [${diagnostic.code}] ${diagnostic.message}`);
+    }
   }
 }
 
@@ -151,10 +159,14 @@ const franchiseCount = await repository.saveFranchises(
   })),
 );
 
-// Keeper rights reference players, so those rows must exist first. Identity comes from
-// the stored catalog rather than being invented here: prior-draft metadata carries a name
-// but no position, and guessing one would put a real player at the wrong position.
+// Keeper rights reference players, so those rows must exist first. There is now one right
+// per rostered player rather than one per declaration, so this covers whole rosters.
+// Identity still comes from the stored catalog rather than being invented here: prior-draft
+// metadata carries a name but no position, and guessing one would put a real player at the
+// wrong position.
 const keeperPlayerIds = [...new Set(keeperRights.map((right) => String(right.playerId)))];
+console.log(`
+Rostered players priced as keeper candidates: ${keeperPlayerIds.length}`);
 const knownPlayers = await repository.readPlayersBySleeperId(keeperPlayerIds);
 const missingPlayerIds = keeperPlayerIds.filter((id) => !knownPlayers.has(id));
 
@@ -175,10 +187,16 @@ const playerCount = await repository.savePlayers(
 
 const persistableRights = keeperRights.filter((right) => knownPlayers.has(String(right.playerId)));
 
+// A right is what a keeper would cost; a decision is what someone actually declared. Only
+// the declared ones become decisions, and that set is what removes players from the draft
+// pool -- writing a decision per right would take every rostered player off the board.
+const declared = new Set(declaredSleeperPlayerIds);
+const declaredRights = persistableRights.filter((right) => declared.has(String(right.playerId)));
+
 const pickCount = await repository.savePickInventory(imported.pickInventory);
 const rightCount = await repository.saveKeeperRights(persistableRights);
 const decisionCount = await repository.saveKeeperDecisions(
-  persistableRights.map((right) => ({
+  declaredRights.map((right) => ({
     seasonId,
     franchiseId: String(right.franchiseId),
     playerId: String(right.playerId),
@@ -194,8 +212,8 @@ console.log(`  raw snapshots     ${snapshotCount}`);
 console.log(`  franchises        ${franchiseCount}`);
 console.log(`  players           ${playerCount} (from catalog)`);
 console.log(`  pick assets       ${pickCount}`);
-console.log(`  keeper rights     ${rightCount}`);
-console.log(`  keeper decisions  ${decisionCount}`);
+console.log(`  keeper rights     ${rightCount} (one per rostered player)`);
+console.log(`  keeper decisions  ${decisionCount} (declared)`);
 
 console.log('\nRead back from the database');
 for (const table of [

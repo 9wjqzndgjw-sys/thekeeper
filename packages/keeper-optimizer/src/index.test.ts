@@ -528,6 +528,7 @@ function makeKeeperRight(id: string, nominalRound: number): KeeperRight {
     franchiseId: userFranchiseId,
     sourceType: 'drafted',
     nominalRound,
+    priorSeasonRound: null,
     effectiveOverallPick: null,
     confidence: 'confirmed',
     manualOverrideReason: null,

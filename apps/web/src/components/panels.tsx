@@ -1,7 +1,7 @@
 import type { FranchiseId, LeagueStateSnapshot, Position } from '@keeper/domain';
 import type { KeeperOptimizationResult } from '@keeper/keeper-optimizer';
 import type { ReplacementLevels } from '@keeper/valuation';
-import type { AppContext } from '../app-state.js';
+import type { AppContext, FranchiseOutlook } from '../app-state.js';
 import type { BoardViewModel } from '../view-models/boards.js';
 import type { PickHorizon } from '../view-models/pick-horizon.js';
 import type { SyncStatusViewModel } from '../view-models/sync-status.js';
@@ -31,7 +31,7 @@ export function DataSourcePanel({
       <p className="muted">
         {isFixture
           ? 'Synthetic league. Nothing here reflects a real roster.'
-          : `${context.players.length} projected players · ${context.snapshot.keeperRights.length} declared keeper(s) · ${context.snapshot.franchises.length} franchises`}
+          : `${context.players.length} projected players · ${context.snapshot.keeperRights.length} keeper candidate(s) · ${context.declaredPlayerIds.size} declared · ${context.snapshot.franchises.length} franchises`}
       </p>
 
       {/* Recommendations are specific to one team's keepers and one team's picks, so which
@@ -192,14 +192,27 @@ export function BoardPanel({ board }: { board: BoardViewModel }) {
   );
 }
 
-export function KeeperCombinationsPanel({
-  optimization,
-}: {
-  optimization: KeeperOptimizationResult;
-}) {
+export function KeeperCombinationsPanel({ outlook }: { outlook: FranchiseOutlook }) {
+  // Every rostered player is a candidate, so the full list runs to hundreds of sets. The
+  // best few are what a reader can act on; the count says what they were chosen from.
+  const optimization = outlook.assumingDeclarations;
+  const floorByIds = new Map(
+    outlook.floor.combinations.map((combination) => [
+      combination.selectedKeeperRightIds.join('|'),
+      combination,
+    ]),
+  );
+  const ranked = [...optimization.combinations]
+    .sort((left, right) => right.totalScore - left.totalScore)
+    .slice(0, 15);
+
   return (
     <section className="panel">
       <h2>Keeper combinations</h2>
+      <p className="muted">
+        {optimization.combinations.length} legal set(s) across this roster. Scores are shown
+        assuming declarations hold, with the floor beside them.
+      </p>
       <h3>Best by mode</h3>
       <table>
         <thead>
@@ -222,7 +235,7 @@ export function KeeperCombinationsPanel({
         </tbody>
       </table>
 
-      <h3>Every legal set</h3>
+      <h3>Best fifteen sets</h3>
       <table>
         <thead>
           <tr>
@@ -231,29 +244,43 @@ export function KeeperCombinationsPanel({
             <th>Retained IV</th>
             <th>Pick cost</th>
             <th>KSV</th>
-            <th>TCV</th>
+            <th>Floor KSV</th>
           </tr>
         </thead>
         <tbody>
-          {optimization.combinations.map((combination) => (
-            <tr key={combination.selectedKeeperRightIds.join('|') || 'none'}>
-              <td>{formatNumber(combination.totalScore)}</td>
-              <td>{describeKeepers(combination)}</td>
-              <td>{formatNumber(combination.retainedIntrinsicValue)}</td>
-              <td>{formatNumber(combination.consumedPickValue)}</td>
-              <td>{formatNumber(combination.keeperSurplusValue)}</td>
-              <td>{formatNumber(combination.teamContextValue)}</td>
-            </tr>
-          ))}
+          {ranked.map((combination) => {
+            const key = combination.selectedKeeperRightIds.join('|');
+            const floor = floorByIds.get(key);
+            return (
+              <tr key={key || 'none'}>
+                <td>{formatNumber(combination.totalScore)}</td>
+                <td>{describeKeepers(combination)}</td>
+                <td>{formatNumber(combination.retainedIntrinsicValue)}</td>
+                <td>{formatNumber(combination.consumedPickValue)}</td>
+                <td>{formatNumber(combination.keeperSurplusValue)}</td>
+                <td>{floor ? formatNumber(floor.keeperSurplusValue) : '—'}</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </section>
   );
 }
 
-export function RecommendationPanel({ optimization }: { optimization: KeeperOptimizationResult }) {
-  const best = optimization.bestByMode.expected;
-  if (!best) {
+/**
+ * The recommendation, read both ways.
+ *
+ * A keeper is worth what it beats, and what a pick would otherwise have bought depends on
+ * whether the rest of the league's declarations hold. When both readings pick the same set,
+ * that set is not relying on anyone else's choices; when they disagree, the difference is
+ * the thing worth thinking about, so it is stated rather than averaged away.
+ */
+export function RecommendationPanel({ outlook }: { outlook: FranchiseOutlook }) {
+  const floor = outlook.floor.bestByMode.expected;
+  const assuming = outlook.assumingDeclarations.bestByMode.expected;
+
+  if (!floor && !assuming) {
     return (
       <section className="panel">
         <h2>Recommendation</h2>
@@ -262,11 +289,38 @@ export function RecommendationPanel({ optimization }: { optimization: KeeperOpti
     );
   }
 
+  const agree =
+    floor !== null &&
+    assuming !== null &&
+    describeKeepers(floor) === describeKeepers(assuming as typeof floor);
+
   return (
     <section className="panel">
       <h2>Recommendation</h2>
-      <p>{describeKeepers(best)}</p>
-      <pre>{best.explanation}</pre>
+      {agree && floor ? (
+        <>
+          <p>{describeKeepers(floor)}</p>
+          <p className="muted">
+            The same set wins whether or not the rest of the league&apos;s declarations hold, so it
+            does not depend on anyone else&apos;s choices.
+          </p>
+          <pre>{floor.explanation}</pre>
+        </>
+      ) : (
+        <>
+          <dl>
+            <dt>If declarations hold</dt>
+            <dd>{assuming ? describeKeepers(assuming) : 'No legal set'}</dd>
+            <dt>If they do not</dt>
+            <dd>{floor ? describeKeepers(floor) : 'No legal set'}</dd>
+          </dl>
+          <p className="warning">
+            These disagree, so the better set depends on twelve other managers not changing their
+            minds before the deadline.
+          </p>
+          {floor ? <pre>{floor.explanation}</pre> : null}
+        </>
+      )}
     </section>
   );
 }

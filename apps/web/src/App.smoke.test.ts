@@ -65,7 +65,7 @@ describe('createAppContext', () => {
     // best keepers on the board. The fixture pool is only three players against a twelve
     // team league, so the levels themselves are legitimately zero -- what matters here is
     // that each position was actually computed.
-    const levels = createFixtureAppContext().replacementLevels;
+    const levels = createFixtureAppContext().scenarios.replacementLevels;
 
     for (const position of ['QB', 'RB', 'WR', 'TE', 'DEF'] as const) {
       expect(levels[position]).toBeTypeOf('number');
@@ -79,11 +79,13 @@ describe('createAppContext', () => {
       source: 'fixture',
     });
 
-    expect(context.replacementLevels.QB!).toBeGreaterThan(0);
-    expect(context.replacementLevels.RB!).toBeGreaterThan(0);
+    expect(context.scenarios.replacementLevels.QB!).toBeGreaterThan(0);
+    expect(context.scenarios.replacementLevels.RB!).toBeGreaterThan(0);
     // A quarterback projecting 400 in a one-QB league is worth his distance above the best
     // startable alternative, not his whole total.
-    expect(context.replacementLevels.QB!).toBeGreaterThan(context.replacementLevels.RB!);
+    expect(context.scenarios.replacementLevels.QB!).toBeGreaterThan(
+      context.scenarios.replacementLevels.RB!,
+    );
   });
 
   it('builds a pick value curve that never rises with a later pick', () => {
@@ -96,7 +98,7 @@ describe('createAppContext', () => {
     });
 
     const costs = [1, 5, 10, 25, 50, 100].map((pick) =>
-      context.pickValueCurve.getValueForPick(pick),
+      context.scenarios.assumingDeclarations.getValueForPick(pick),
     );
     for (let index = 1; index < costs.length; index += 1) {
       expect(costs[index]!).toBeLessThanOrEqual(costs[index - 1]!);

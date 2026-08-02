@@ -87,7 +87,12 @@ export function computeReplacementLevels(input: ComputeReplacementLevelsInput): 
     (position, points) => points,
   );
 
-  const preliminary = readReplacementLevels(remainingByPosition);
+  // The yardstick for the bench pass counts every player still in the pool, rostered or
+  // not. It measures how much better a player is than the next one at his position, which
+  // is a fact about the talent pool -- skipping rostered players here would move the
+  // yardstick according to who happens to be held, and replacement would then depend on
+  // declarations after all.
+  const preliminary = readReplacementLevels(remainingByPosition, { availableOnly: false });
 
   // Finally bench, ranked by value over the preliminary replacement rather than by points.
   takeAcrossPositions(
@@ -205,22 +210,31 @@ function takeAcrossPositions(
  * team keeps someone worth less than a bench spot, say -- and must not then be reported as
  * the level a draftable player is measured against.
  */
-function bestAvailable(remaining: ReadonlyMap<Position, PoolEntry[]>, position: Position): number {
-  return remaining.get(position)?.find((entry) => entry.available)?.points ?? 0;
+function best(
+  remaining: ReadonlyMap<Position, PoolEntry[]>,
+  position: Position,
+  availableOnly: boolean,
+): number {
+  const entries = remaining.get(position) ?? [];
+  return (availableOnly ? entries.find((entry) => entry.available) : entries[0])?.points ?? 0;
 }
 
-function readReplacementLevels(remaining: ReadonlyMap<Position, PoolEntry[]>): ReplacementLevels {
+function readReplacementLevels(
+  remaining: ReadonlyMap<Position, PoolEntry[]>,
+  options: { availableOnly: boolean } = { availableOnly: true },
+): ReplacementLevels {
+  const { availableOnly } = options;
   const levels: ReplacementLevels = {};
 
   for (const position of positions()) {
     if (!FLEX_ELIGIBLE_POSITIONS.includes(position)) {
-      levels[position] = bestAvailable(remaining, position);
+      levels[position] = best(remaining, position, availableOnly);
     }
   }
 
   const bestFlexEligible = Math.max(
     0,
-    ...FLEX_ELIGIBLE_POSITIONS.map((position) => bestAvailable(remaining, position)),
+    ...FLEX_ELIGIBLE_POSITIONS.map((position) => best(remaining, position, availableOnly)),
   );
   for (const position of FLEX_ELIGIBLE_POSITIONS) {
     levels[position] = bestFlexEligible;

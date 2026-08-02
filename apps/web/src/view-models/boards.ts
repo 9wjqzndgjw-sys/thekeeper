@@ -22,7 +22,16 @@ export interface BuildBoardsInput {
   seasonId: SeasonId;
   franchiseId: FranchiseId;
   projectionSource: ProjectionSource;
-  pickValueCurve: PickValueCurve;
+  /**
+   * What a pick buys with the whole pool on the board. Used by the pre-keeper board, whose
+   * premise is that nothing has been held back.
+   */
+  pickValueCurveIgnoringDeclarations: PickValueCurve;
+  /**
+   * What a pick buys once declared keepers are held. Used by the post-keeper and live
+   * boards, so each board prices picks against the same pool it ranks players from.
+   */
+  pickValueCurveAssumingDeclarations: PickValueCurve;
   lineup: LineupSettings;
   teamCount: number;
   /** Keeper rights already declared league-wide. Drives the post-keeper pool. */
@@ -34,9 +43,13 @@ export interface BuildBoardsInput {
 }
 
 /**
- * Builds all three boards from one calculation path, varying only which players are
- * already off the pool. Keeping them on one function is what makes them comparable: any
- * difference between the boards is a difference in the pool, not in the maths.
+ * Builds all three boards from one calculation path, varying only which players are already
+ * off the pool. Keeping them on one function is what makes them comparable: any difference
+ * between the boards is a difference in the pool, not in the maths.
+ *
+ * Each board is priced against the pool it is built from. Valuing the pre-keeper board with
+ * a post-keeper curve would show a player ranked against everyone while his cost assumed
+ * the best of them were already gone.
  */
 export function buildBoards(input: BuildBoardsInput): BoardViewModel[] {
   const shared = {
@@ -44,7 +57,6 @@ export function buildBoards(input: BuildBoardsInput): BoardViewModel[] {
     seasonId: input.seasonId,
     franchiseId: input.franchiseId,
     projectionSource: input.projectionSource,
-    pickValueCurve: input.pickValueCurve,
     lineup: input.lineup,
     teamCount: input.teamCount,
     userNextOverallPick: input.userNextOverallPick,
@@ -60,7 +72,11 @@ export function buildBoards(input: BuildBoardsInput): BoardViewModel[] {
       mode: 'pre_keeper',
       title: 'Pre-keeper board',
       poolDescription: 'Every player, before any keeper is removed from the pool.',
-      board: computeLiveDraftBoard({ ...shared, selections: [] }),
+      board: computeLiveDraftBoard({
+        ...shared,
+        pickValueCurve: input.pickValueCurveIgnoringDeclarations,
+        selections: [],
+      }),
       caveats: [
         'Keeper entry probabilities are not modelled yet, so this board weights every player as if he will be available.',
       ],
@@ -69,7 +85,11 @@ export function buildBoards(input: BuildBoardsInput): BoardViewModel[] {
       mode: 'post_keeper',
       title: 'Post-keeper board',
       poolDescription: `Pool with ${input.declaredKeeperRights.length} declared keeper(s) removed.`,
-      board: computeLiveDraftBoard({ ...shared, selections: keeperSelections }),
+      board: computeLiveDraftBoard({
+        ...shared,
+        pickValueCurve: input.pickValueCurveAssumingDeclarations,
+        selections: keeperSelections,
+      }),
       caveats:
         input.declaredKeeperRights.length === 0
           ? ['No keepers are declared yet, so this matches the pre-keeper board.']
@@ -79,7 +99,11 @@ export function buildBoards(input: BuildBoardsInput): BoardViewModel[] {
       mode: 'live',
       title: 'Live board',
       poolDescription: `Pool with ${input.selections.length} recorded pick(s) removed.`,
-      board: computeLiveDraftBoard({ ...shared, selections: input.selections }),
+      board: computeLiveDraftBoard({
+        ...shared,
+        pickValueCurve: input.pickValueCurveAssumingDeclarations,
+        selections: input.selections,
+      }),
       caveats: [],
     },
   ];

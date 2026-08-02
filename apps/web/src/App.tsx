@@ -136,7 +136,8 @@ export function Dashboard({ context }: { context: AppContext }) {
         seasonId: context.snapshot.season.id,
         franchiseId,
         projectionSource: context.projectionSource,
-        pickValueCurve: context.pickValueCurve,
+        pickValueCurveIgnoringDeclarations: context.scenarios.ignoringDeclarations,
+        pickValueCurveAssumingDeclarations: context.scenarios.assumingDeclarations,
         lineup: context.snapshot.league.lineup,
         teamCount: context.snapshot.league.rules.teamCount,
         declaredKeeperRights: context.snapshot.keeperRights,
@@ -169,7 +170,10 @@ export function Dashboard({ context }: { context: AppContext }) {
         onFranchiseChange={setFranchiseId}
       />
       <SyncStatusPanel status={syncStatus} />
-      <SetupPanel snapshot={context.snapshot} replacementLevels={context.replacementLevels} />
+      <SetupPanel
+        snapshot={context.snapshot}
+        replacementLevels={context.scenarios.replacementLevels}
+      />
       <PickHorizonPanel horizon={horizon} />
 
       <nav className="board-tabs">
@@ -187,8 +191,8 @@ export function Dashboard({ context }: { context: AppContext }) {
       </nav>
       <BoardPanel board={visibleBoard} />
 
-      <RecommendationPanel optimization={optimization} />
-      <KeeperCombinationsPanel optimization={optimization} />
+      <RecommendationPanel outlook={optimization} />
+      <KeeperCombinationsPanel outlook={optimization} />
     </main>
   );
 }

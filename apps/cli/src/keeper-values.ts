@@ -1,209 +1,181 @@
-import { readFileSync } from 'node:fs';
-import type { FranchiseId, SeasonId } from '@keeper/domain';
-import { createServiceClientFromEnv, KeeperRepository } from '@keeper/persistence';
-import { loadProjections, matchProjectionsToCatalog } from '@keeper/projections';
-import { resolveKeeperCombination } from '@keeper/keeper-optimizer';
+import type { FranchiseId, KeeperRight, Position, SeasonId } from '@keeper/domain';
+import { createAnonClient, loadLeagueSnapshot } from '@keeper/persistence';
+import { optimizeKeeperCombinations, resolveKeeperCombination } from '@keeper/keeper-optimizer';
 import {
+  buildDeclarationScenarios,
   computeIntrinsicValue,
   computeKeeperSurplusValue,
-  computeReplacementLevels,
-  createPickValueCurveFromRankedValues,
+  createSnapshotProjectionSource,
+  type PickValueCurve,
 } from '@keeper/valuation';
-import {
-  LEAGUE_LINEUP,
-  LEAGUE_SCORING,
-  LEAGUE_TEAM_COUNT,
-  resolveSleeperLeagueId,
-} from './league-config.js';
+import { resolveSleeperLeagueId } from './league-config.js';
 
 /**
- * Prices every declared keeper in the league against the exact pick it consumes.
+ * Prices keepers two ways, against the exact pick each consumes.
  *
- *   npm run keeper-values -w @keeper/cli
+ *   npm run keeper-values -w @keeper/cli [-- --all]
  *
- * Pulls declarations, pick ownership, and player identity from the database, scores
- * projections under the league's own settings, then resolves each franchise's declared
- * set against the picks that franchise actually owns -- so a traded-away round shows up
- * as displacement onto an earlier pick rather than a round label.
+ * Every rostered player is a candidate, so this reports both what each franchise declared
+ * and what it could have declared instead. `--all` prints the best alternative sets too.
+ *
+ * The two valuations differ only in whether the rest of the league's declarations are
+ * assumed to hold. Nothing else moves: replacement level, and therefore intrinsic value, is
+ * the same in both, because a kept player takes a roster slot off the board along with
+ * himself. What changes is what a pick would otherwise have bought.
  */
-const sleeperLeagueId = resolveSleeperLeagueId(
-  process.argv.slice(2).find((arg) => !arg.startsWith('--')),
-);
+const args = process.argv.slice(2);
+const showAlternatives = args.includes('--all');
+const sleeperLeagueId = resolveSleeperLeagueId(args.find((arg) => !arg.startsWith('--')));
 const seasonId = `season:${sleeperLeagueId}` as SeasonId;
 
-const skillCsv = process.env.KEEPER_SKILL_PROJECTIONS_CSV;
-const defenseCsv = process.env.KEEPER_DEFENSE_PROJECTIONS_CSV;
-if (!skillCsv) {
-  console.error('Set KEEPER_SKILL_PROJECTIONS_CSV in .env.local.');
-  process.exit(1);
-}
-
-const repository = new KeeperRepository(createServiceClientFromEnv());
-const [catalog, keeperRights, pickInventory, franchises] = await Promise.all([
-  repository.readAllPlayers(),
-  repository.readKeeperRights(seasonId),
-  repository.readPickInventory(seasonId),
-  repository.readFranchises(seasonId),
-]);
-
-const projections = loadProjections({
-  skillPositionCsv: readFileSync(skillCsv, 'utf8'),
-  defenseCsv: defenseCsv ? readFileSync(defenseCsv, 'utf8') : undefined,
-  scoring: LEAGUE_SCORING,
+const loaded = await loadLeagueSnapshot({
+  client: createAnonClient(process.env),
   seasonId,
 });
+const snapshot = loaded.snapshot;
+const projectionSource = createSnapshotProjectionSource(snapshot);
 
-const projectedById = new Map<string, number>(
-  projections.playerSeasons.map((season) => [String(season.playerId), season.projectedPoints ?? 0]),
-);
+const pointsOf = (playerId: string): number =>
+  projectionSource.getProjectedPoints(playerId as never, snapshot.season.id) ?? 0;
+const positionById = new Map(loaded.players.map((p) => [String(p.id), p.position as Position]));
+const nameById = new Map(loaded.players.map((p) => [String(p.id), p.fullName]));
 
-// Shared with the `project` command so the two cannot disagree about who a projection is.
-const { pointsBySleeperId, positionBySleeperId, nameBySleeperId } = matchProjectionsToCatalog({
-  catalog,
-  projections: projections.players.map((player) => ({
-    fullName: player.fullName,
-    position: player.position,
-    projectedPoints: projectedById.get(String(player.id)) ?? 0,
+const scenarios = buildDeclarationScenarios({
+  candidates: loaded.players.map((player) => ({
+    position: player.position as Position,
+    projectedPoints: pointsOf(String(player.id)),
+    declared: loaded.declaredPlayerIds.has(String(player.id)),
   })),
+  lineup: snapshot.league.lineup,
+  teamCount: snapshot.league.rules.teamCount,
 });
 
-const declaredIds = new Set(keeperRights.map((right) => String(right.playerId)));
-const unmatchedKeepers = [...declaredIds].filter((id) => !pointsBySleeperId.has(id));
+// A candidate with no projection cannot be valued. Treating him as zero would rank him as
+// a uniquely bad keeper, which is a claim rather than a measurement, so he is set aside and
+// counted instead.
+const projectedIds = new Set(loaded.players.map((player) => String(player.id)));
+const valuable = snapshot.keeperRights.filter((right) => projectedIds.has(String(right.playerId)));
+const unprojected = snapshot.keeperRights.length - valuable.length;
 
-console.log(
-  `Projections matched to catalog: ${pointsBySleeperId.size} of ${projections.players.length}`,
-);
-if (unmatchedKeepers.length > 0) {
-  console.log(
-    `Declared keepers with no projection: ${unmatchedKeepers.map((id) => nameBySleeperId.get(id) ?? id).join(', ')}`,
-  );
-}
-
-type LeaguePosition = 'QB' | 'RB' | 'WR' | 'TE' | 'DEF';
-
-const positionOf = (sleeperId: string): LeaguePosition =>
-  (positionBySleeperId.get(sleeperId) ?? 'RB') as LeaguePosition;
-
-const draftable = [...pointsBySleeperId.entries()].filter(([id]) => !declaredIds.has(id));
-const kept = [...pointsBySleeperId.entries()].filter(([id]) => declaredIds.has(id));
-const toCandidate = ([id, projectedPoints]: [string, number]) => ({
-  position: positionOf(id),
-  projectedPoints,
-});
-
-// Keepers are passed as rostered rather than dropped. They take supply *and* demand off the
-// board together: thirty-odd players held back also means thirty-odd roster slots the draft
-// no longer has to fill. Leaving them out entirely shrinks only the supply, which drives
-// replacement level down and inflates every value measured against it.
-const replacementLevels = computeReplacementLevels({
-  candidates: draftable.map(toCandidate),
-  rosteredCandidates: kept.map(toCandidate),
-  lineup: LEAGUE_LINEUP,
-  teamCount: LEAGUE_TEAM_COUNT,
-});
-
-// A pick is worth the best player still on the board when it comes up. One player leaves
-// the pool per pick, so ranking the draftable pool by value and reading off position N
-// gives what pick N can buy.
-//
-// Ordering by ADP instead looks tempting, since it reflects where the market takes people,
-// but it produces a curve that is not monotonic: the player who happens to go 92nd may be
-// worth less than the one who goes 93rd, which would price the earlier pick below the
-// later one.
-//
-// Keepers are excluded here even though they counted toward replacement above. The two
-// answer different questions: replacement is what the league as a whole leaves on the
-// waiver wire, while the curve is what a pick can actually buy, and a kept player is not
-// for sale.
-const draftBoardValues = draftable
-  .map(
-    ([id, projectedPoints]) =>
-      computeIntrinsicValue({
-        projectedPoints,
-        replacementLevel: replacementLevels[positionOf(id)] ?? 0,
-      }).intrinsicValue,
-  )
-  .sort((left, right) => right - left);
-
-const pickValueCurve = createPickValueCurveFromRankedValues(draftBoardValues);
-
-console.log(
-  `\nReplacement levels: ${(['QB', 'RB', 'WR', 'TE', 'DEF'] as const)
-    .map((p) => `${p} ${(replacementLevels[p] ?? 0).toFixed(0)}`)
-    .join('  ')}`,
-);
-
-const rightsByFranchise = new Map<FranchiseId, typeof keeperRights>();
-for (const right of keeperRights) {
-  rightsByFranchise.set(right.franchiseId, [
-    ...(rightsByFranchise.get(right.franchiseId) ?? []),
+const rightsByFranchise = new Map<string, KeeperRight[]>();
+for (const right of valuable) {
+  rightsByFranchise.set(String(right.franchiseId), [
+    ...(rightsByFranchise.get(String(right.franchiseId)) ?? []),
     right,
   ]);
 }
 
-const rows: { franchise: string; total: number; lines: string[] }[] = [];
+console.log(`League:            ${snapshot.league.name} (${snapshot.season.year})`);
+console.log(
+  `Keeper candidates: ${snapshot.keeperRights.length} across ${snapshot.franchises.length} rosters`,
+);
+console.log(`Declared:          ${loaded.declaredPlayerIds.size}`);
+if (unprojected > 0) {
+  console.log(`Not valued:        ${unprojected} rostered player(s) carry no projection`);
+}
+console.log(
+  `\nReplacement levels: ${(['QB', 'RB', 'WR', 'TE', 'DEF'] as const)
+    .map((p) => `${p} ${(scenarios.replacementLevels[p] ?? 0).toFixed(0)}`)
+    .join('  ')}`,
+);
 
-for (const franchise of franchises) {
-  const rights = rightsByFranchise.get(franchise.id as FranchiseId) ?? [];
+const intrinsicOf = (playerId: string): number =>
+  computeIntrinsicValue({
+    projectedPoints: pointsOf(playerId),
+    replacementLevel: scenarios.replacementLevels[positionById.get(playerId) ?? 'RB'] ?? 0,
+  }).intrinsicValue;
+
+const surplusAt = (playerId: string, overallPick: number, curve: PickValueCurve): number =>
+  computeKeeperSurplusValue({
+    intrinsicValue: intrinsicOf(playerId),
+    pickValueCurve: curve,
+    exactOverallPick: overallPick,
+  }).keeperSurplusValue;
+
+console.log(
+  '\nEach keeper priced two ways. "floor" assumes the rest of the league could still change',
+);
+console.log('its mind; "declared" takes the twelve declarations at face value.\n');
+
+for (const franchise of snapshot.franchises) {
+  const rights = rightsByFranchise.get(franchise.id) ?? [];
+  const declaredRights = rights.filter((r) => loaded.declaredPlayerIds.has(String(r.playerId)));
   if (rights.length === 0) {
     continue;
   }
 
-  const resolution = resolveKeeperCombination(rights, pickInventory, {
+  const resolution = resolveKeeperCombination(declaredRights, snapshot.pickInventory, {
     franchiseId: franchise.id as FranchiseId,
-    maxKeepers: 3,
+    maxKeepers: snapshot.league.rules.maxKeepers,
   });
 
+  let floorTotal = 0;
+  let declaredTotal = 0;
   const lines: string[] = [];
-  let total = 0;
-
-  if (!resolution.legal) {
-    lines.push(`   ILLEGAL: ${resolution.invalidReason}`);
-  }
 
   for (const resolved of resolution.resolvedPicks) {
-    const sleeperId = String(resolved.playerId);
-    const points = pointsBySleeperId.get(sleeperId);
-    const position = positionOf(sleeperId);
-    const name = nameBySleeperId.get(sleeperId) ?? sleeperId;
-
-    if (points === undefined) {
-      lines.push(`   ${name.padEnd(22)} r${resolved.nominalRound} -> no projection`);
-      continue;
-    }
-
-    const intrinsic = computeIntrinsicValue({
-      projectedPoints: points,
-      replacementLevel: replacementLevels[position] ?? 0,
-    });
-    const surplus = computeKeeperSurplusValue({
-      intrinsicValue: intrinsic.intrinsicValue,
-      pickValueCurve,
-      exactOverallPick: resolved.resolvedOverallPick,
-    });
-    total += surplus.keeperSurplusValue;
+    const playerId = String(resolved.playerId);
+    const floor = surplusAt(playerId, resolved.resolvedOverallPick, scenarios.ignoringDeclarations);
+    const held = surplusAt(playerId, resolved.resolvedOverallPick, scenarios.assumingDeclarations);
+    floorTotal += floor;
+    declaredTotal += held;
 
     const displaced = resolution.displacements.find(
       (d) => d.keeperRightId === resolved.keeperRightId,
     );
     lines.push(
-      `   ${name.padEnd(22)} ${position.padEnd(3)} r${String(resolved.nominalRound).padStart(2)}` +
-        ` -> pick ${String(resolved.resolvedOverallPick).padStart(3)}` +
-        `  IV ${intrinsic.intrinsicValue.toFixed(0).padStart(4)}` +
-        `  cost ${surplus.breakdown.pickOpportunityCost.toFixed(0).padStart(4)}` +
-        `  KSV ${surplus.keeperSurplusValue.toFixed(0).padStart(5)}` +
+      `   ${(nameById.get(playerId) ?? playerId).padEnd(22)}` +
+        ` ${(positionById.get(playerId) ?? '').padEnd(3)}` +
+        ` r${String(resolved.nominalRound).padStart(2)} -> pick ${String(resolved.resolvedOverallPick).padStart(3)}` +
+        `  IV ${intrinsicOf(playerId).toFixed(0).padStart(4)}` +
+        `  floor ${floor.toFixed(0).padStart(5)}` +
+        `  declared ${held.toFixed(0).padStart(5)}` +
+        (floor < 0 && held >= 0 ? '  [contingent]' : '') +
         (displaced ? `  [${displaced.cause}]` : ''),
     );
   }
 
-  rows.push({ franchise: franchise.displayName, total, lines });
-}
-
-console.log('\nDeclared keepers, priced against the exact pick each consumes\n');
-for (const row of rows.sort((a, b) => b.total - a.total)) {
-  console.log(`${row.franchise}  (total KSV ${row.total.toFixed(0)})`);
-  for (const line of row.lines) {
+  console.log(
+    `${franchise.displayName}  (${rights.length} candidates, floor ${floorTotal.toFixed(0)} / declared ${declaredTotal.toFixed(0)})`,
+  );
+  for (const line of lines) {
     console.log(line);
   }
+
+  if (showAlternatives) {
+    // The whole roster is eligible, so the best set is a real search rather than a subset of
+    // three. Run under the floor curve: a set that wins there does not depend on anyone else.
+    const best = optimizeKeeperCombinations({
+      keeperRights: rights,
+      pickInventory: snapshot.pickInventory,
+      players: loaded.players,
+      franchiseId: franchise.id as FranchiseId,
+      seasonId: snapshot.season.id,
+      evaluatedAt: snapshot.evaluatedAt,
+      projectionSource,
+      replacementLevels: scenarios.replacementLevels,
+      pickValueCurve: scenarios.ignoringDeclarations,
+      maxKeepers: snapshot.league.rules.maxKeepers,
+      rulesVersion: snapshot.league.rulesVersion,
+    }).bestByMode.expected;
+
+    if (best) {
+      const declaredIds = new Set(declaredRights.map((r) => String(r.playerId)));
+      const bestIds = new Set(best.playerValuations.map((p) => String(p.playerId)));
+      const same =
+        bestIds.size === declaredIds.size && [...bestIds].every((id) => declaredIds.has(id));
+      console.log(
+        `   best available (floor ${best.keeperSurplusValue.toFixed(0)}): ${
+          best.playerValuations
+            .map((p) => `${p.fullName} r${p.nominalRound}->${p.resolvedOverallPick}`)
+            .join(', ') || 'keep nobody'
+        }${same ? '  = declared' : ''}`,
+      );
+    }
+  }
   console.log('');
+}
+
+for (const caveat of loaded.caveats) {
+  console.log(`  note: ${caveat}`);
 }
