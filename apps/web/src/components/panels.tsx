@@ -3,6 +3,7 @@ import type { KeeperOptimizationResult } from '@keeper/keeper-optimizer';
 import type { ReplacementLevels } from '@keeper/valuation';
 import type { AppContext, FranchiseOutlook } from '../app-state.js';
 import type { BoardViewModel } from '../view-models/boards.js';
+import { buildKeeperModes } from '../view-models/keeper-modes.js';
 import type { PickHorizon } from '../view-models/pick-horizon.js';
 import type { SyncStatusViewModel } from '../view-models/sync-status.js';
 
@@ -205,6 +206,7 @@ export function KeeperCombinationsPanel({ outlook }: { outlook: FranchiseOutlook
   const ranked = [...optimization.combinations]
     .sort((left, right) => right.totalScore - left.totalScore)
     .slice(0, 15);
+  const modes = buildKeeperModes(optimization);
 
   return (
     <section className="panel">
@@ -214,26 +216,45 @@ export function KeeperCombinationsPanel({ outlook }: { outlook: FranchiseOutlook
         assuming declarations hold, with the floor beside them.
       </p>
       <h3>Best by mode</h3>
+      {/* Each mode maximises a different quantity, so the scores are not on one scale and
+          the column that names the quantity is doing real work. The components sit beside
+          the score for the same reason. */}
       <table>
         <thead>
           <tr>
             <th>Mode</th>
+            <th>Maximises</th>
             <th>Score</th>
+            <th>IV</th>
+            <th>Pick cost</th>
+            <th>KSV</th>
             <th>Keepers</th>
           </tr>
         </thead>
         <tbody>
-          {Object.entries(optimization.bestByMode).map(([mode, combination]) => (
-            <tr key={mode}>
-              <td>{mode}</td>
+          {modes.rows.map((row) => (
+            <tr key={row.mode}>
+              <td>{row.mode}</td>
+              <td className="muted-cell">{row.optimises}</td>
+              <td>{formatNumber(row.score)}</td>
+              <td>{formatNumber(row.retainedIntrinsicValue)}</td>
+              <td>{formatNumber(row.consumedPickValue)}</td>
+              <td>{formatNumber(row.keeperSurplusValue)}</td>
               <td>
-                {combination === null ? '—' : formatNumber(combination.modeScores[mode as never])}
+                {row.keepers}
+                {row.agreesWith.length > 0 ? (
+                  <span className="muted-cell"> · same set as {row.agreesWith.join(', ')}</span>
+                ) : null}
               </td>
-              <td>{combination === null ? '—' : describeKeepers(combination)}</td>
             </tr>
           ))}
         </tbody>
       </table>
+      {modes.notes.map((note) => (
+        <p key={note} className="warning">
+          {note}
+        </p>
+      ))}
 
       <h3>Best fifteen sets</h3>
       <table>

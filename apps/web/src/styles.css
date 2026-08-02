@@ -158,3 +158,9 @@ pre {
   border-radius: 0.375rem;
   padding: 0.25rem 0.5rem;
 }
+
+/* Secondary text inside a table cell, where the .muted block rule would fight the layout. */
+.muted-cell {
+  color: var(--muted);
+  font-size: 0.9em;
+}
