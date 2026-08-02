@@ -63,26 +63,48 @@ export function buildDeclarationScenarios(input: {
     teamCount: input.teamCount,
   });
 
-  const rankedValues = (pool: readonly DeclarationScenarioCandidate[]): number[] =>
-    pool
+  return {
+    replacementLevels,
+    ignoringDeclarations: buildPickValueCurveForPool({
+      candidates: input.candidates,
+      replacementLevels,
+      version: 'pool-intact',
+    }),
+    assumingDeclarations: buildPickValueCurveForPool({
+      candidates: undeclared,
+      replacementLevels,
+      version: 'post-declaration',
+    }),
+  };
+}
+
+/**
+ * What each pick buys from a given pool.
+ *
+ * One player leaves per pick, so ranking the pool by value and reading off position N gives
+ * what pick N can expect. Ranking by projected points instead would compare a quarterback's
+ * raw total against a running back's, and ranking by ADP produces a curve that rises --
+ * pricing an early pick below a later one.
+ *
+ * Exported because a board is only coherent when priced against the pool it was built from:
+ * a caller modelling a different set of players off the board needs its own curve, not a
+ * near-enough one.
+ */
+export function buildPickValueCurveForPool(input: {
+  candidates: readonly { position: Position; projectedPoints: number }[];
+  replacementLevels: ReplacementLevels;
+  version?: string;
+}): PickValueCurve {
+  return createPickValueCurveFromRankedValues(
+    input.candidates
       .map(
         (candidate) =>
           computeIntrinsicValue({
             projectedPoints: candidate.projectedPoints,
-            replacementLevel: replacementLevels[candidate.position] ?? 0,
+            replacementLevel: input.replacementLevels[candidate.position] ?? 0,
           }).intrinsicValue,
       )
-      .sort((left, right) => right - left);
-
-  return {
-    replacementLevels,
-    ignoringDeclarations: createPickValueCurveFromRankedValues(
-      rankedValues(input.candidates),
-      'pool-intact',
-    ),
-    assumingDeclarations: createPickValueCurveFromRankedValues(
-      rankedValues(undeclared),
-      'post-declaration',
-    ),
-  };
+      .sort((left, right) => right - left),
+    input.version,
+  );
 }

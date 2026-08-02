@@ -1,4 +1,10 @@
-import type { FranchiseId, LeagueStateSnapshot, Player, Position } from '@keeper/domain';
+import type {
+  FranchiseId,
+  KeeperRight,
+  LeagueStateSnapshot,
+  Player,
+  Position,
+} from '@keeper/domain';
 import {
   createDraftTracker,
   createSleeperSelectionFetcher,
@@ -11,6 +17,7 @@ import {
 } from '@keeper/keeper-optimizer';
 import {
   buildDeclarationScenarios,
+  buildPickValueCurveForPool,
   createSnapshotProjectionSource,
   type DeclarationScenarios,
   type PickValueCurve,
@@ -39,6 +46,16 @@ export interface AppContext {
   scenarios: DeclarationScenarios;
   /** Players some franchise has declared. Drives which pool each board is priced against. */
   declaredPlayerIds: Set<string>;
+  /** The keepers managers have actually declared. Drives the as-declared board. */
+  declaredKeepers: KeeperRight[];
+  /** Each franchise's best set, capped by the keeper limit. Drives the expected board. */
+  expectedKeepers: KeeperRight[];
+  /**
+   * What a pick buys once every franchise holds its best set. Its own curve rather than a
+   * reuse of the declared one, because the expected board removes a different set of
+   * players and a board is only coherent priced against its own pool.
+   */
+  pickValueCurveAssumingExpected: PickValueCurve;
   optimization: FranchiseOutlook;
   tracker: DraftTracker;
   /** Where this league came from, and anything a reader should discount. */
@@ -85,7 +102,7 @@ export function createAppContext(input: {
     teamCount: snapshot.league.rules.teamCount,
   });
 
-  const context: Omit<AppContext, 'optimization'> = {
+  const context: BaseContext = {
     snapshot,
     players,
     projectionSource,
@@ -96,7 +113,76 @@ export function createAppContext(input: {
     tracker: createTracker(snapshot),
   };
 
-  return { ...context, optimization: optimizeForFranchise(context, snapshot.userFranchiseId) };
+  const expectedKeepers = projectLeagueKeepers(context);
+  const expectedPlayerIds = new Set(expectedKeepers.map((right) => String(right.playerId)));
+
+  return {
+    ...context,
+    declaredKeepers: snapshot.keeperRights.filter((right) =>
+      declaredPlayerIds.has(String(right.playerId)),
+    ),
+    expectedKeepers,
+    pickValueCurveAssumingExpected: buildPickValueCurveForPool({
+      candidates: players
+        .filter((player) => !expectedPlayerIds.has(String(player.id)))
+        .map((player) => ({
+          position: player.position as Position,
+          projectedPoints: projectedFor(player),
+        })),
+      replacementLevels: scenarios.replacementLevels,
+      version: 'post-expected-keepers',
+    }),
+    optimization: optimizeForFranchise(context, snapshot.userFranchiseId),
+  };
+}
+
+/** The context before the parts that depend on running the optimizer over the league. */
+type BaseContext = Omit<
+  AppContext,
+  'optimization' | 'expectedKeepers' | 'declaredKeepers' | 'pickValueCurveAssumingExpected'
+>;
+
+/**
+ * The keepers the league is expected to hold: each franchise's best set, capped by the
+ * league's keeper limit.
+ *
+ * A keeper right exists for every rostered player, so the post-keeper pool cannot be
+ * derived from rights alone -- that would take all 188 rostered players off the board
+ * instead of the 36 a twelve team league can actually keep.
+ *
+ * Sets are chosen under the pool-intact curve. Using the post-keeper curve would be
+ * circular: it is built from whoever is left after keepers are removed, which is the very
+ * thing being decided here.
+ */
+export function projectLeagueKeepers(context: BaseContext): KeeperRight[] {
+  const { snapshot } = context;
+  const projected = new Set(context.players.map((player) => String(player.id)));
+
+  return snapshot.franchises.flatMap((franchise) => {
+    const rights = snapshot.keeperRights.filter(
+      (right) => right.franchiseId === franchise.id && projected.has(String(right.playerId)),
+    );
+    if (rights.length === 0) {
+      return [];
+    }
+
+    const best = optimizeKeeperCombinations({
+      keeperRights: rights,
+      pickInventory: snapshot.pickInventory,
+      players: context.players,
+      franchiseId: franchise.id,
+      seasonId: snapshot.season.id,
+      evaluatedAt: snapshot.evaluatedAt,
+      projectionSource: context.projectionSource,
+      replacementLevels: context.scenarios.replacementLevels,
+      pickValueCurve: context.scenarios.ignoringDeclarations,
+      maxKeepers: snapshot.league.rules.maxKeepers,
+      rulesVersion: snapshot.league.rulesVersion,
+    }).bestByMode.expected;
+
+    const selected = new Set(best?.selectedKeeperRightIds ?? []);
+    return rights.filter((right) => selected.has(right.id));
+  });
 }
 
 /**
@@ -105,7 +191,7 @@ export function createAppContext(input: {
  * optimizer, rather than re-reading the league.
  */
 export function optimizeForFranchise(
-  context: Omit<AppContext, 'optimization'>,
+  context: BaseContext,
   franchiseId: FranchiseId,
 ): FranchiseOutlook {
   const { snapshot } = context;

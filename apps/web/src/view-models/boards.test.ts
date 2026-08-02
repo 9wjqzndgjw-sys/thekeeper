@@ -14,7 +14,7 @@ import {
   createPickValueCurveFromRankedValues,
   createProjectionSourceFromPlayerSeasons,
 } from '@keeper/valuation';
-import { buildBoards } from './boards.js';
+import { buildBoards, type BoardMode } from './boards.js';
 
 const seasonId = 'season-2026' as SeasonId;
 const franchiseId = 'franchise-1' as FranchiseId;
@@ -48,71 +48,112 @@ const baseInput = {
   pickValueCurveAssumingDeclarations: createPickValueCurveFromRankedValues(
     Array.from({ length: 30 }, () => 10),
   ),
+  pickValueCurveAssumingExpected: createPickValueCurveFromRankedValues(
+    Array.from({ length: 30 }, () => 10),
+  ),
+  declaredKeeperRights: [] as KeeperRight[],
   lineup,
   teamCount: 1,
 };
 
 describe('buildBoards', () => {
-  it('returns the three boards in reading order', () => {
-    const boards = buildBoards({ ...baseInput, declaredKeeperRights: [], selections: [] });
+  // Selected by mode rather than by position: a board added in the middle should not
+  // silently repoint an assertion at a different pool.
+  const board = (input: Parameters<typeof buildBoards>[0], mode: BoardMode) =>
+    buildBoards(input).find((candidate) => candidate.mode === mode)!;
 
-    expect(boards.map((board) => board.mode)).toEqual(['pre_keeper', 'post_keeper', 'live']);
+  it('returns the four boards in reading order', () => {
+    const boards = buildBoards({ ...baseInput, expectedKeeperRights: [], selections: [] });
+
+    expect(boards.map((entry) => entry.mode)).toEqual([
+      'pre_keeper',
+      'as_declared',
+      'expected',
+      'live',
+    ]);
   });
 
   it('keeps the whole pool on the pre-keeper board', () => {
-    const [preKeeper] = buildBoards({
-      ...baseInput,
-      declaredKeeperRights: [keeperRight('p-1')],
-      selections: [selection('s-2')],
-    });
+    const preKeeper = board(
+      {
+        ...baseInput,
+        declaredKeeperRights: [keeperRight('p-1')],
+        expectedKeeperRights: [keeperRight('p-1')],
+        selections: [selection('s-2')],
+      },
+      'pre_keeper',
+    );
 
-    expect(preKeeper!.board.availablePlayerCount).toBe(3);
+    expect(preKeeper.board.availablePlayerCount).toBe(3);
   });
 
-  it('removes declared keepers from the post-keeper pool only', () => {
-    const [, postKeeper] = buildBoards({
+  it('removes only what was actually declared from the as-declared pool', () => {
+    // The two keeper boards answer different questions, so they must be able to disagree:
+    // here a manager has declared nobody while the model expects him to keep someone.
+    const input = {
       ...baseInput,
-      declaredKeeperRights: [keeperRight('p-1')],
+      declaredKeeperRights: [] as KeeperRight[],
+      expectedKeeperRights: [keeperRight('p-1')],
       selections: [],
-    });
+    };
 
-    expect(postKeeper!.board.availablePlayerCount).toBe(2);
-    expect(postKeeper!.board.rows.some((row) => row.fullName === 'Kept Star')).toBe(false);
-    expect(postKeeper!.poolDescription).toContain('1 declared keeper');
+    expect(board(input, 'as_declared').board.availablePlayerCount).toBe(3);
+    expect(board(input, 'expected').board.availablePlayerCount).toBe(2);
+  });
+
+  it('removes expected keepers from the expected pool', () => {
+    const expected = board(
+      {
+        ...baseInput,
+        declaredKeeperRights: [],
+        expectedKeeperRights: [keeperRight('p-1')],
+        selections: [],
+      },
+      'expected',
+    );
+
+    expect(expected.board.availablePlayerCount).toBe(2);
+    expect(expected.board.rows.some((row) => row.fullName === 'Kept Star')).toBe(false);
+    expect(expected.poolDescription).toContain('1 keeper(s)');
   });
 
   it('removes recorded picks from the live pool', () => {
-    const [, , live] = buildBoards({
-      ...baseInput,
-      declaredKeeperRights: [],
-      selections: [selection('s-2')],
-    });
+    const live = board(
+      { ...baseInput, expectedKeeperRights: [], selections: [selection('s-2')] },
+      'live',
+    );
 
-    expect(live!.board.rows.some((row) => row.fullName === 'Drafted Star')).toBe(false);
-    expect(live!.board.availablePlayerCount).toBe(2);
+    expect(live.board.rows.some((row) => row.fullName === 'Drafted Star')).toBe(false);
+    expect(live.board.availablePlayerCount).toBe(2);
   });
 
   it('does not let a keeper placeholder collide with a real selection', () => {
-    const [, postKeeper] = buildBoards({
-      ...baseInput,
-      declaredKeeperRights: [keeperRight('p-1'), keeperRight('p-2', 'keeper-2', 10)],
-      selections: [],
-    });
+    const expected = board(
+      {
+        ...baseInput,
+        declaredKeeperRights: [],
+        expectedKeeperRights: [keeperRight('p-1'), keeperRight('p-2', 'keeper-2', 10)],
+        selections: [],
+      },
+      'expected',
+    );
 
     // Both keepers are removed, so neither placeholder overwrote the other.
-    expect(postKeeper!.board.availablePlayerCount).toBe(1);
-    expect(postKeeper!.board.rows[0]).toMatchObject({ fullName: 'Still Free' });
+    expect(expected.board.availablePlayerCount).toBe(1);
+    expect(expected.board.rows[0]).toMatchObject({ fullName: 'Still Free' });
   });
 
   it('says plainly when a board is limited by what is not yet modelled', () => {
-    const [preKeeper, postKeeper] = buildBoards({
+    const input = {
       ...baseInput,
-      declaredKeeperRights: [],
+      declaredKeeperRights: [] as KeeperRight[],
+      expectedKeeperRights: [],
       selections: [],
-    });
+    };
 
-    expect(preKeeper!.caveats[0]).toMatch(/entry probabilities are not modelled/i);
-    expect(postKeeper!.caveats[0]).toMatch(/No keepers are declared/i);
+    expect(board(input, 'pre_keeper').caveats[0]).toMatch(/entry probabilities are not modelled/i);
+    expect(board(input, 'as_declared').caveats[0]).toMatch(/Nobody has declared/i);
+    expect(board(input, 'expected').caveats[0]).toMatch(/forecast, not a record/i);
   });
 });
 

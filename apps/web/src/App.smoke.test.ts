@@ -29,9 +29,10 @@ describe('Dashboard', () => {
     expect(markup.indexOf('No successful sync yet')).toBeLessThan(markup.indexOf('Pick horizon'));
   });
 
-  it('offers all three boards and renders one of them', () => {
+  it('offers every board and renders one of them', () => {
     expect(markup).toContain('Pre-keeper board');
-    expect(markup).toContain('Post-keeper board');
+    expect(markup).toContain('As declared');
+    expect(markup).toContain('If everyone keeps optimally');
     expect(markup).toContain('Live board');
     expect(markup).toContain('At your pick');
   });
@@ -86,6 +87,34 @@ describe('createAppContext', () => {
     expect(context.scenarios.replacementLevels.QB!).toBeGreaterThan(
       context.scenarios.replacementLevels.RB!,
     );
+  });
+
+  it('expects at most the keeper limit per franchise, never every rostered player', () => {
+    // The regression this guards. A keeper right exists for every rostered player, so
+    // feeding rights straight to the post-keeper board emptied all twelve rosters and left
+    // a board of free agents. A twelve team league can keep three each, so 36 is the ceiling
+    // however many candidates exist.
+    const snapshot = deepPoolSnapshot();
+    const players = deepPoolPlayers();
+    const context = createAppContext({ snapshot, players, source: 'fixture' });
+
+    const limit = snapshot.league.rules.maxKeepers * snapshot.franchises.length;
+    expect(context.expectedKeepers.length).toBeLessThanOrEqual(limit);
+    expect(context.expectedKeepers.length).toBeLessThan(snapshot.keeperRights.length || Infinity);
+
+    for (const franchise of snapshot.franchises) {
+      const held = context.expectedKeepers.filter((right) => right.franchiseId === franchise.id);
+      expect(held.length).toBeLessThanOrEqual(snapshot.league.rules.maxKeepers);
+    }
+  });
+
+  it('keeps one player for at most one franchise', () => {
+    // A player kept by two teams would be removed twice from the pool and, worse, would be
+    // recommended to both.
+    const context = createFixtureAppContext();
+    const playerIds = context.expectedKeepers.map((right) => String(right.playerId));
+
+    expect(new Set(playerIds).size).toBe(playerIds.length);
   });
 
   it('builds a pick value curve that never rises with a later pick', () => {
