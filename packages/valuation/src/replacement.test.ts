@@ -52,7 +52,7 @@ describe('computeReplacementLevels', () => {
     expect(levels.QB).toBe(0);
   });
 
-  it('deepens the pool with bench spots, pulled cross-position by points', () => {
+  it('deepens the pool with bench spots, pulled cross-position', () => {
     // Leftover after starters+flex, labeled: QB 60, DEF 10, FLEX 30, FLEX 25.
     // Sorted by points: QB 60, FLEX 30, FLEX 25, DEF 10. With bench = 1 * 2
     // teams = 2 bench spots, the top 2 (QB 60 and FLEX 30) get rostered as
@@ -65,6 +65,77 @@ describe('computeReplacementLevels', () => {
     expect(levels.RB).toBe(25);
     expect(levels.WR).toBe(25);
     expect(levels.TE).toBe(25);
+  });
+
+  it('does not let a deep one-slot position swallow the bench', () => {
+    // A realistic single-quarterback league: 12 teams, 6 bench, and far more quarterbacks
+    // than anyone would roster. Ranking the bench by raw points would fill it with
+    // quarterbacks, because a QB20 still outscores a useful third running back.
+    const realisticLineup: LineupSettings = {
+      qb: 1,
+      rb: 2,
+      wr: 2,
+      te: 1,
+      flex: 2,
+      def: 1,
+      bench: 6,
+      ir: 2,
+    };
+    const candidates: ReplacementCandidate[] = [
+      ...Array.from({ length: 60 }, (_, i) => ({
+        position: 'QB' as const,
+        projectedPoints: 380 - i * 3,
+      })),
+      ...Array.from({ length: 140 }, (_, i) => ({
+        position: 'RB' as const,
+        projectedPoints: 320 - i * 2,
+      })),
+      ...Array.from({ length: 200 }, (_, i) => ({
+        position: 'WR' as const,
+        projectedPoints: 300 - i,
+      })),
+      ...Array.from({ length: 130 }, (_, i) => ({
+        position: 'TE' as const,
+        projectedPoints: 215 - i,
+      })),
+    ];
+
+    const levels = computeReplacementLevels({
+      candidates,
+      lineup: realisticLineup,
+      teamCount: 12,
+    });
+
+    // Replacement should land near the starter cutoff, not deep in the position.
+    // QB13 is 344; a points-ranked bench dragged this down past QB50.
+    expect(levels.QB!).toBeGreaterThan(300);
+    // The top quarterback must not out-rank the top back once both are measured
+    // against their own replacement.
+    expect(380 - levels.QB!).toBeLessThan(320 - levels.RB!);
+  });
+
+  it('leaves a shallow position with a replacement level above zero', () => {
+    // Only 32 defences exist league-wide. Without a per-position bench cap the bench
+    // absorbs every one, replacement falls to zero, and every defence looks like an
+    // early-round pick.
+    const levels = computeReplacementLevels({
+      candidates: [
+        ...Array.from({ length: 32 }, (_, i) => ({
+          position: 'DEF' as const,
+          projectedPoints: 100 - i,
+        })),
+        ...Array.from({ length: 200 }, (_, i) => ({
+          position: 'WR' as const,
+          projectedPoints: 300 - i,
+        })),
+      ],
+      lineup: { qb: 1, rb: 2, wr: 2, te: 1, flex: 2, def: 1, bench: 6, ir: 2 },
+      teamCount: 12,
+    });
+
+    expect(levels.DEF!).toBeGreaterThan(0);
+    // Best defence projects 100, so its value over replacement stays modest.
+    expect(100 - levels.DEF!).toBeLessThan(30);
   });
 
   it('produces a strictly lower (or equal) replacement level as bench spots increase', () => {

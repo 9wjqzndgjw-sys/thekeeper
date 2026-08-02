@@ -8,7 +8,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "start": "tsx src/index.ts",
-    "draft": "tsx src/draft.ts"
+    "draft": "tsx src/draft.ts",
+    "board": "tsx src/board.ts"
   },
   "dependencies": {
     "@keeper/domain": "*",
@@ -16,6 +17,7 @@
     "@keeper/keeper-optimizer": "*",
     "@keeper/sleeper-adapter": "*",
     "@keeper/test-fixtures": "*",
-    "@keeper/valuation": "*"
+    "@keeper/valuation": "*",
+    "@keeper/projections": "*"
   }
 }
