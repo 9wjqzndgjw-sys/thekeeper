@@ -36,9 +36,9 @@ export function createDatabaseClient(input: CreateDatabaseClientInput): KeeperDa
  * browser has no such object: Vite substitutes `import.meta.env` at build time, and the
  * caller passes it in.
  *
- * The key here is the anon key, which is published to every visitor by design. What keeps
- * the data safe is row level security on the tables, not the secrecy of this key -- so the
- * service-role key must never be used in place of it.
+ * The key here is the anon key, which is published to every visitor by design. RLS keeps
+ * that role read-only and denies it source/audit data; normalized dashboard rows are
+ * intentionally public. The service-role key must never be used in place of it.
  */
 export function createAnonClient(env: Record<string, string | undefined>): KeeperDatabaseClient {
   const url = env.VITE_SUPABASE_URL;

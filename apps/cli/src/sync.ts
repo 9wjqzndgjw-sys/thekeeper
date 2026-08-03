@@ -6,6 +6,7 @@ import {
   importSeasonDraftState,
   reconstructKeeperRights,
   RECORDED_LEAGUE_POLICY,
+  resolveSleeperLeagueContinuity,
 } from '@keeper/sleeper-adapter';
 import { createServiceClientFromEnv, KeeperRepository } from '@keeper/persistence';
 import type { LeagueId, SeasonId } from '@keeper/domain';
@@ -23,7 +24,6 @@ import { canReplaceKeeperState, canReplacePickInventory } from './replacement-au
 const sleeperLeagueId = resolveSleeperLeagueId(
   process.argv.slice(2).find((arg) => !arg.startsWith('--')),
 );
-const leagueId = `league:${sleeperLeagueId}` as LeagueId;
 const seasonId = `season:${sleeperLeagueId}` as SeasonId;
 
 const repository = new KeeperRepository(createServiceClientFromEnv());
@@ -71,7 +71,19 @@ const adapter = createSleeperAdapter({
 console.log(`Importing league ${sleeperLeagueId}...`);
 
 let imported: Awaited<ReturnType<typeof importSeasonDraftState>>;
+let league: Awaited<ReturnType<typeof adapter.getLeague>>;
+let leagueId: LeagueId;
 try {
+  league = await adapter.getLeague(sleeperLeagueId);
+  const continuity = await resolveSleeperLeagueContinuity({
+    current: league.data,
+    loadLeague: async (id) => (await adapter.getLeague(id)).data,
+  });
+  leagueId = `league:${continuity.rootSleeperLeagueId}` as LeagueId;
+  console.log(
+    `Stable league identity: ${leagueId} (${continuity.sleeperLeagueIds.length} season(s) traced)`,
+  );
+
   imported = await importSeasonDraftState({
     adapter,
     leagueId,
@@ -86,7 +98,6 @@ Import failed after persisting ${snapshotCount} raw snapshot(s).`);
   throw error;
 }
 
-const league = await adapter.getLeague(sleeperLeagueId);
 const rosters = await adapter.getLeagueRosters(sleeperLeagueId);
 const users = await adapter.getLeagueUsers(sleeperLeagueId);
 

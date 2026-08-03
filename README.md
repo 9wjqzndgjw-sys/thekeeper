@@ -60,8 +60,9 @@ real group of people even though it is not itself a secret.
 ```bash
 SLEEPER_LEAGUE_ID=<numeric league id>
 
-# Supabase. The anon key is published to every visitor by design -- row level security is
-# what protects the data. The service-role key bypasses RLS entirely and must stay local.
+# Supabase. The anon key is published to every visitor by design. RLS makes the normalized
+# dashboard read-only and keeps source/audit data private; the service-role key bypasses RLS
+# entirely and must stay local.
 VITE_SUPABASE_URL=https://<project>.supabase.co
 VITE_SUPABASE_ANON_KEY=<anon key>
 SUPABASE_SERVICE_ROLE_KEY=<service role key>
@@ -129,8 +130,9 @@ Set three environment variables on the project:
 
 Only these three. **Never set `SUPABASE_SERVICE_ROLE_KEY` on the Vercel project**: anything
 prefixed `VITE_` is compiled into a file every visitor downloads, and the service role
-bypasses row level security entirely. The anon key is published by design and RLS is what
-protects the data.
+bypasses row level security entirely. The anon key is published by design; RLS blocks writes
+and hides source payloads, owner IDs, and audit records, but the normalized dashboard data is
+public to anyone who can reach the Supabase project.
 
 Two things worth knowing before the first deploy:
 

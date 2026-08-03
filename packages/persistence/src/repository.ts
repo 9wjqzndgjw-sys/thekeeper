@@ -290,7 +290,10 @@ export class KeeperRepository {
             sleeper_owner_id: record.sleeperOwnerId,
             identity_source: record.identitySource,
           })),
-          { onConflict: 'season_id,franchise_id' },
+          // The roster coordinate is the season-local identity. Conflict on it so a season
+          // first imported under a per-season league id can migrate to the stable league
+          // chain identity without colliding with its existing roster row.
+          { onConflict: 'season_id,sleeper_roster_id' },
         )
       ).error,
     );
@@ -455,7 +458,7 @@ export class KeeperRepository {
     decisions: readonly KeeperDecisionRecord[],
   ): Promise<KeeperDecisionRecord[]> {
     const seasonIds = new Set(decisions.map((decision) => String(decision.seasonId)));
-    const rightIds = new Set<string>();
+    const rightIdentityById = new Map<string, string>();
     const rightIdByIdentity = new Map<string, string>();
 
     for (const seasonId of seasonIds) {
@@ -466,21 +469,25 @@ export class KeeperRepository {
       unwrap('read keeper rights for decision links', error);
 
       for (const row of (data ?? []) as unknown as Record<string, unknown>[]) {
-        rightIds.add(String(row.id));
-        rightIdByIdentity.set(
-          keeperRightIdentity(seasonId, row.franchise_id, row.player_id),
-          String(row.id),
-        );
+        const identity = keeperRightIdentity(seasonId, row.franchise_id, row.player_id);
+        rightIdentityById.set(String(row.id), identity);
+        rightIdByIdentity.set(identity, String(row.id));
       }
     }
 
     return decisions.map((decision) => {
-      if (decision.keeperRightId === null || rightIds.has(decision.keeperRightId)) {
+      if (decision.keeperRightId === null) {
         return decision;
       }
-      const stored = rightIdByIdentity.get(
-        keeperRightIdentity(decision.seasonId, decision.franchiseId, decision.playerId),
+      const decisionIdentity = keeperRightIdentity(
+        decision.seasonId,
+        decision.franchiseId,
+        decision.playerId,
       );
+      if (rightIdentityById.get(decision.keeperRightId) === decisionIdentity) {
+        return decision;
+      }
+      const stored = rightIdByIdentity.get(decisionIdentity);
       return { ...decision, keeperRightId: stored ?? null };
     });
   }
@@ -609,7 +616,7 @@ export class KeeperRepository {
         .from('keeper_rights')
         .select(
           'id, season_id, franchise_id, player_id, source_type, nominal_round, ' +
-            'prior_season_round, confidence, manual_override_reason',
+            'prior_season_round, confidence',
         )
         .eq('season_id', seasonId)
         .order('id')
@@ -630,7 +637,10 @@ export class KeeperRepository {
               priorSeasonRound: (row.prior_season_round as number | null) ?? null,
               effectiveOverallPick: null,
               confidence: row.confidence,
-              manualOverrideReason: (row.manual_override_reason as string | null) ?? null,
+              // Audit reasons are intentionally not exposed to the browser role. The
+              // normalized right carries the corrected value; the private audit table
+              // retains who changed it and why.
+              manualOverrideReason: null,
             }) as KeeperRight,
         ),
       );

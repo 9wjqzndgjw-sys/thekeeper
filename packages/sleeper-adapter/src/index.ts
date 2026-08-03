@@ -1,6 +1,12 @@
 import { z } from 'zod';
 import type { Player, PlayerId } from '@keeper/domain';
 
+export {
+  resolveSleeperLeagueContinuity,
+  type SleeperLeagueContinuity,
+  type SleeperLeagueLink,
+} from './league-continuity.js';
+
 export const SLEEPER_MAPPER_VERSION = '1';
 
 export interface SleeperAdapterConfig {

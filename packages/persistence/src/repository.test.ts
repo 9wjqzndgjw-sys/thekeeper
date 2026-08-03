@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { DraftPickAsset, KeeperRight, SeasonId } from '@keeper/domain';
+import type { DraftPickAsset, FranchiseId, KeeperRight, LeagueId, SeasonId } from '@keeper/domain';
 import {
   KeeperRepository,
+  type FranchiseSeasonRecord,
   type KeeperDecisionRecord,
   type PlayerSeasonRecord,
 } from './repository.js';
@@ -428,5 +429,70 @@ describe('decision links to keeper rights', () => {
     return new KeeperRepository(client).saveKeeperDecisions([decision('p1')]).then(() => {
       expect(tables.keeper_decisions![0]!.keeper_right_id).toBe('k-p1');
     });
+  });
+
+  it('relinks an existing id when it belongs to a different player', async () => {
+    const { client, tables } = fakeClient({
+      keeper_rights: [
+        {
+          season_id: seasonId,
+          id: 'k-p1',
+          franchise_id: 'f1',
+          player_id: 'somebody-else',
+          source_type: 'drafted',
+        },
+        {
+          season_id: seasonId,
+          id: 'manual-fix',
+          franchise_id: 'f1',
+          player_id: 'p1',
+          source_type: 'manual_override',
+        },
+      ],
+      keeper_decisions: [],
+    });
+
+    await new KeeperRepository(client).saveKeeperDecisions([decision('p1')]);
+
+    expect(tables.keeper_decisions![0]!.keeper_right_id).toBe('manual-fix');
+  });
+});
+
+describe('saveFranchises', () => {
+  it('migrates a season roster to its stable cross-season franchise identity', async () => {
+    const { client, tables } = fakeClient({
+      franchises: [
+        { id: 'franchise:old:user:u1', league_id: 'league:season-id', display_name: 'Team' },
+      ],
+      franchise_seasons: [
+        {
+          season_id: seasonId,
+          franchise_id: 'franchise:old:user:u1',
+          sleeper_roster_id: 1,
+          sleeper_owner_id: 'u1',
+          identity_source: 'owner',
+        },
+      ],
+    });
+    const stable: FranchiseSeasonRecord = {
+      franchise: {
+        id: 'franchise:league:root:user:u1' as FranchiseId,
+        leagueId: 'league:root' as LeagueId,
+        displayName: 'Team',
+      },
+      sleeperRosterId: 1,
+      sleeperOwnerId: 'u1',
+      identitySource: 'owner',
+    };
+
+    await new KeeperRepository(client).saveFranchises(seasonId, [stable]);
+
+    expect(tables.franchise_seasons).toEqual([
+      expect.objectContaining({
+        season_id: seasonId,
+        sleeper_roster_id: 1,
+        franchise_id: stable.franchise.id,
+      }),
+    ]);
   });
 });
