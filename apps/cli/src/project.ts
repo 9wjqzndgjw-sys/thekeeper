@@ -4,6 +4,7 @@ import { createServiceClientFromEnv, KeeperRepository } from '@keeper/persistenc
 import { loadProjections, matchProjectionsToCatalog } from '@keeper/projections';
 import type { SleeperScoringSettings } from '@keeper/valuation';
 import { LEAGUE_SCORING, resolveSleeperLeagueId } from './league-config.js';
+import { canReplaceProjections, MINIMUM_PROJECTION_MATCH_RATE } from './replacement-authority.js';
 
 /**
  * Scores projection exports under this league's settings and stores the result.
@@ -92,13 +93,23 @@ if (matched.unmatchedProjectionNames.length > 0) {
 // season empty or, worse, defences only. A file that could not be read is not a statement
 // that the season has no players in it.
 const loadErrors = loaded.diagnostics.filter((diagnostic) => diagnostic.level === 'error');
-if (loadErrors.length > 0 || loaded.players.length === 0) {
+const projectionsAreAuthoritative = canReplaceProjections({
+  loadErrorCount: loadErrors.length,
+  loadedPlayerCount: loaded.players.length,
+  matchedPlayerCount: matched.pointsBySleeperId.size,
+});
+
+if (!projectionsAreAuthoritative) {
   console.error('\nRefusing to replace stored projections; nothing was written.');
   for (const diagnostic of loadErrors) {
     console.error(`  [${diagnostic.code}] ${diagnostic.message}`);
   }
   if (loadErrors.length === 0) {
-    console.error('  The export produced no players at all.');
+    console.error(
+      loaded.players.length === 0
+        ? '  The export produced no players at all.'
+        : `  Only ${matched.pointsBySleeperId.size} of ${loaded.players.length} exported players matched the catalog; at least ${MINIMUM_PROJECTION_MATCH_RATE * 100}% must match. Refresh the catalog and retry.`,
+    );
   }
   process.exit(1);
 }

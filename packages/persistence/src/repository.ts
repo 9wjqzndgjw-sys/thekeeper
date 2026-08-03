@@ -90,6 +90,14 @@ function unwrap(label: string, error: { message: string } | null): void {
   }
 }
 
+function keeperRightIdentity(seasonId: unknown, franchiseId: unknown, playerId: unknown): string {
+  return JSON.stringify([String(seasonId), String(franchiseId), String(playerId)]);
+}
+
+function keeperDecisionIdentity(seasonId: unknown, playerId: unknown): string {
+  return JSON.stringify([String(seasonId), String(playerId)]);
+}
+
 /**
  * Writes are upserts keyed on the same identity the schema enforces, so re-running an
  * import is idempotent rather than duplicating or failing on a constraint.
@@ -375,8 +383,10 @@ export class KeeperRepository {
    * batched like the catalog.
    */
   async saveKeeperRights(rights: readonly KeeperRight[], batchSize = 500): Promise<number> {
-    for (let start = 0; start < rights.length; start += batchSize) {
-      const batch = rights.slice(start, start + batchSize);
+    const writableRights = await this.excludeKeeperRightsProtectedByManualOverrides(rights);
+
+    for (let start = 0; start < writableRights.length; start += batchSize) {
+      const batch = writableRights.slice(start, start + batchSize);
       unwrap(
         `keeper_rights [${start}-${start + batch.length}]`,
         (
@@ -397,18 +407,20 @@ export class KeeperRepository {
         ).error,
       );
     }
-    return rights.length;
+    return writableRights.length;
   }
 
   async saveKeeperDecisions(decisions: readonly KeeperDecisionRecord[]): Promise<number> {
-    if (decisions.length === 0) {
+    const writableDecisions =
+      await this.excludeKeeperDecisionsProtectedByManualOverrides(decisions);
+    if (writableDecisions.length === 0) {
       return 0;
     }
     unwrap(
       'keeper_decisions',
       (
         await this.client.from('keeper_decisions').upsert(
-          decisions.map((decision) => ({
+          writableDecisions.map((decision) => ({
             season_id: decision.seasonId,
             franchise_id: decision.franchiseId,
             player_id: decision.playerId,
@@ -421,7 +433,92 @@ export class KeeperRepository {
         )
       ).error,
     );
-    return decisions.length;
+    return writableDecisions.length;
+  }
+
+  /**
+   * A normalized manual row is authoritative over an imported row for the same right.
+   * Protect both the primary key and the domain identity, since a hand-entered correction
+   * may use a different id while still targeting the same franchise/player pair.
+   */
+  private async excludeKeeperRightsProtectedByManualOverrides(
+    rights: readonly KeeperRight[],
+  ): Promise<KeeperRight[]> {
+    const manualIds = new Set(
+      rights
+        .filter((right) => right.sourceType === 'manual_override')
+        .map((right) => String(right.id)),
+    );
+    const manualIdentities = new Set(
+      rights
+        .filter((right) => right.sourceType === 'manual_override')
+        .map((right) => keeperRightIdentity(right.seasonId, right.franchiseId, right.playerId)),
+    );
+    const importedSeasonIds = new Set(
+      rights
+        .filter((right) => right.sourceType !== 'manual_override')
+        .map((right) => String(right.seasonId)),
+    );
+
+    for (const seasonId of importedSeasonIds) {
+      const { data, error } = await this.client
+        .from('keeper_rights')
+        .select('id, franchise_id, player_id')
+        .eq('season_id', seasonId)
+        .eq('source_type', 'manual_override');
+      unwrap('read manual keeper rights', error);
+
+      for (const row of (data ?? []) as unknown as Record<string, unknown>[]) {
+        manualIds.add(String(row.id));
+        manualIdentities.add(
+          keeperRightIdentity(seasonId, String(row.franchise_id), String(row.player_id)),
+        );
+      }
+    }
+
+    return rights.filter(
+      (right) =>
+        right.sourceType === 'manual_override' ||
+        (!manualIds.has(String(right.id)) &&
+          !manualIdentities.has(
+            keeperRightIdentity(right.seasonId, right.franchiseId, right.playerId),
+          )),
+    );
+  }
+
+  /** A Sleeper declaration cannot overwrite a human correction for the same player. */
+  private async excludeKeeperDecisionsProtectedByManualOverrides(
+    decisions: readonly KeeperDecisionRecord[],
+  ): Promise<KeeperDecisionRecord[]> {
+    const manualKeys = new Set(
+      decisions
+        .filter((decision) => decision.source === 'manual')
+        .map((decision) => keeperDecisionIdentity(decision.seasonId, decision.playerId)),
+    );
+    const importedSeasonIds = new Set(
+      decisions
+        .filter((decision) => decision.source !== 'manual')
+        .map((decision) => String(decision.seasonId)),
+    );
+
+    for (const seasonId of importedSeasonIds) {
+      const { data, error } = await this.client
+        .from('keeper_decisions')
+        .select('player_id')
+        .eq('season_id', seasonId)
+        .eq('source', 'manual');
+      unwrap('read manual keeper decisions', error);
+
+      for (const row of (data ?? []) as unknown as Record<string, unknown>[]) {
+        manualKeys.add(keeperDecisionIdentity(seasonId, String(row.player_id)));
+      }
+    }
+
+    return decisions.filter(
+      (decision) =>
+        decision.source === 'manual' ||
+        !manualKeys.has(keeperDecisionIdentity(decision.seasonId, decision.playerId)),
+    );
   }
 
   /** Every player the catalog knows, paged past PostgREST's default row cap. */

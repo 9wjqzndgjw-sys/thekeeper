@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import type { KeeperRight, SeasonId } from '@keeper/domain';
-import { KeeperRepository, type KeeperDecisionRecord } from './repository.js';
+import type { DraftPickAsset, KeeperRight, SeasonId } from '@keeper/domain';
+import {
+  KeeperRepository,
+  type KeeperDecisionRecord,
+  type PlayerSeasonRecord,
+} from './repository.js';
 import type { KeeperDatabaseClient } from './client.js';
 
 const seasonId = 'season:1' as SeasonId;
@@ -102,6 +106,28 @@ function decision(
   };
 }
 
+function pick(id: string, round: number): DraftPickAsset {
+  return {
+    id,
+    seasonId,
+    round,
+    originalFranchiseId: 'f1',
+    currentFranchiseId: 'f1',
+    slot: 1,
+    overallPick: (round - 1) * 12 + 1,
+    ownershipConfidence: 'confirmed',
+  } as DraftPickAsset;
+}
+
+function playerSeason(playerId: string, projectedPoints: number): PlayerSeasonRecord {
+  return {
+    seasonId,
+    playerId,
+    projectedPoints,
+    projectionSource: 'test',
+  };
+}
+
 describe('replaceKeeperDecisions', () => {
   it('removes a withdrawn declaration', () => {
     const { client, tables } = fakeClient({
@@ -148,6 +174,34 @@ describe('replaceKeeperDecisions', () => {
     });
   });
 
+  it('does not overwrite a manual declaration when Sleeper reports the same player', async () => {
+    const { client, tables } = fakeClient({
+      keeper_decisions: [
+        {
+          season_id: seasonId,
+          franchise_id: 'manual-franchise',
+          player_id: 'a',
+          keeper_right_id: 'manual-right',
+          source: 'manual',
+        },
+      ],
+    });
+
+    const counts = await new KeeperRepository(client).replaceKeeperDecisions(seasonId, [
+      decision('a'),
+    ]);
+
+    expect(counts).toEqual({ written: 0, removed: 0 });
+    expect(tables.keeper_decisions).toEqual([
+      expect.objectContaining({
+        franchise_id: 'manual-franchise',
+        keeper_right_id: 'manual-right',
+        player_id: 'a',
+        source: 'manual',
+      }),
+    ]);
+  });
+
   it('leaves another season alone', () => {
     const { client, tables } = fakeClient({
       keeper_decisions: [
@@ -190,5 +244,112 @@ describe('replaceKeeperRights', () => {
     return new KeeperRepository(client).replaceKeeperRights(seasonId, []).then(() => {
       expect(tables.keeper_rights!.map((row) => row.id)).toEqual(['k-fix']);
     });
+  });
+
+  it('does not overwrite a manual right with the same id', async () => {
+    const { client, tables } = fakeClient({
+      keeper_rights: [
+        {
+          season_id: seasonId,
+          franchise_id: 'f1',
+          player_id: 'a',
+          id: 'k1',
+          source_type: 'manual_override',
+          nominal_round: 2,
+        },
+      ],
+    });
+
+    const counts = await new KeeperRepository(client).replaceKeeperRights(seasonId, [
+      right('k1', 'a'),
+    ]);
+
+    expect(counts).toEqual({ written: 0, removed: 0 });
+    expect(tables.keeper_rights).toEqual([
+      expect.objectContaining({
+        id: 'k1',
+        nominal_round: 2,
+        source_type: 'manual_override',
+      }),
+    ]);
+  });
+
+  it('does not insert a second right over a manual correction with a different id', async () => {
+    const { client, tables } = fakeClient({
+      keeper_rights: [
+        {
+          season_id: seasonId,
+          franchise_id: 'f1',
+          player_id: 'a',
+          id: 'manual-k1',
+          source_type: 'manual_override',
+          nominal_round: 2,
+        },
+      ],
+    });
+
+    const counts = await new KeeperRepository(client).replaceKeeperRights(seasonId, [
+      right('sleeper-k1', 'a'),
+    ]);
+
+    expect(counts).toEqual({ written: 0, removed: 0 });
+    expect(tables.keeper_rights).toHaveLength(1);
+    expect(tables.keeper_rights![0]).toMatchObject({
+      id: 'manual-k1',
+      nominal_round: 2,
+      source_type: 'manual_override',
+    });
+  });
+});
+
+describe('replacePickInventory', () => {
+  it('removes omitted picks without touching another season', async () => {
+    const { client, tables } = fakeClient({
+      draft_pick_assets: [
+        { season_id: seasonId, id: 'p1', round: 1 },
+        { season_id: seasonId, id: 'p2', round: 2 },
+        { season_id: 'season:other', id: 'other-pick', round: 1 },
+      ],
+    });
+
+    const counts = await new KeeperRepository(client).replacePickInventory(seasonId, [
+      pick('p1', 3),
+    ]);
+
+    expect(counts).toEqual({ written: 1, removed: 1 });
+    expect(tables.draft_pick_assets).toEqual([
+      expect.objectContaining({ id: 'p1', round: 3, season_id: seasonId }),
+      expect.objectContaining({ id: 'other-pick', season_id: 'season:other' }),
+    ]);
+  });
+});
+
+describe('replacePlayerSeasons', () => {
+  it('removes omitted projections without touching another season', async () => {
+    const { client, tables } = fakeClient({
+      player_seasons: [
+        { season_id: seasonId, player_id: 'a', projected_points: 100 },
+        { season_id: seasonId, player_id: 'b', projected_points: 90 },
+        { season_id: 'season:other', player_id: 'a', projected_points: 80 },
+      ],
+    });
+
+    const counts = await new KeeperRepository(client).replacePlayerSeasons(seasonId, [
+      playerSeason('a', 120),
+    ]);
+
+    expect(counts).toEqual({ written: 1, removed: 1 });
+    expect(tables.player_seasons).toEqual([
+      expect.objectContaining({
+        player_id: 'a',
+        projected_points: 120,
+        season_id: seasonId,
+      }),
+      expect.objectContaining({
+        player_id: 'a',
+        projected_points: 80,
+        season_id: 'season:other',
+      }),
+    ]);
   });
 });

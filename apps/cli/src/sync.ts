@@ -10,6 +10,7 @@ import {
 import { createServiceClientFromEnv, KeeperRepository } from '@keeper/persistence';
 import type { LeagueId, SeasonId } from '@keeper/domain';
 import { LEAGUE_LINEUP, resolveSleeperLeagueId } from './league-config.js';
+import { canReplaceKeeperState, canReplacePickInventory } from './replacement-authority.js';
 
 /**
  * Imports a live league and persists it.
@@ -98,6 +99,7 @@ const franchiseMap = buildFranchiseMap({
 // Keeper costs come from the previous season's draft, so the chain has to be followed.
 let keeperRights: ReturnType<typeof reconstructKeeperRights>['keeperRights'] = [];
 let declaredSleeperPlayerIds: string[] = [];
+let keeperReconstructionErrorCount = 0;
 const priorLeagueId = league.data.previousSleeperLeagueId;
 const playerNames: Record<string, string> = {};
 
@@ -127,6 +129,9 @@ if (priorLeagueId) {
 
     for (const diagnostic of reconstructed.diagnostics) {
       console.warn(`  [${diagnostic.code}] ${diagnostic.message}`);
+      if (diagnostic.level === 'error') {
+        keeperReconstructionErrorCount += 1;
+      }
     }
   }
 }
@@ -240,8 +245,16 @@ const declaredRights = persistableRights.filter((right) => declared.has(String(r
 // does the same to every keeper right and declaration. A failed read is not a statement
 // that the season is empty, so partial imports fall back to merging and say so.
 const importErrors = imported.diagnostics.filter((diagnostic) => diagnostic.level === 'error');
-const inventoryIsAuthoritative = importErrors.length === 0 && imported.pickInventory.length > 0;
-const rightsAreAuthoritative = keeperRights.length > 0;
+const inventoryIsAuthoritative = canReplacePickInventory({
+  importErrorCount: importErrors.length,
+  pickCount: imported.pickInventory.length,
+});
+const rightsAreAuthoritative = canReplaceKeeperState({
+  reconstructionErrorCount: keeperReconstructionErrorCount,
+  reconstructedRightCount: keeperRights.length,
+  persistableRightCount: persistableRights.length,
+  missingPlayerCount: missingPlayerIds.length,
+});
 
 for (const diagnostic of importErrors) {
   console.warn(`  [${diagnostic.code}] ${diagnostic.message}`);
