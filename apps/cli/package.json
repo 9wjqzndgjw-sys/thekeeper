@@ -21,6 +21,7 @@
     "@keeper/domain": "*",
     "@keeper/draft-tracker": "*",
     "@keeper/keeper-optimizer": "*",
+    "@keeper/mock-draft": "*",
     "@keeper/sleeper-adapter": "*",
     "@keeper/test-fixtures": "*",
     "@keeper/valuation": "*",

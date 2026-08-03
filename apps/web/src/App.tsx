@@ -1,7 +1,12 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { FranchiseId } from '@keeper/domain';
 import type { DraftTrackerState } from '@keeper/draft-tracker';
-import { loadAppContext, optimizeForFranchise, type AppContext } from './app-state.js';
+import {
+  createMockDraftAppContext,
+  loadAppContext,
+  optimizeForFranchise,
+  type AppContext,
+} from './app-state.js';
 import { buildBoards, type BoardMode } from './view-models/boards.js';
 import { buildPickHorizon } from './view-models/pick-horizon.js';
 import { buildSyncStatus } from './view-models/sync-status.js';
@@ -20,6 +25,8 @@ type LoadState =
   | { status: 'ready'; context: AppContext }
   | { status: 'failed'; message: string };
 
+const MOCK_DRAFT_DEMO_PARAM = 'mock-draft';
+
 /**
  * Loads the league, then renders it. The load is a real network read, so the three states
  * are all rendered rather than assumed away -- a page that shows an empty board while it is
@@ -27,10 +34,13 @@ type LoadState =
  */
 export function App() {
   const [state, setState] = useState<LoadState>({ status: 'loading' });
+  const [demoMode] = useState(() => readDemoMode());
 
   useEffect(() => {
     let cancelled = false;
-    loadAppContext()
+    const load = demoMode ? Promise.resolve(createMockDraftAppContext()) : loadAppContext();
+
+    load
       .then((context) => {
         if (!cancelled) {
           setState({ status: 'ready', context });
@@ -45,14 +55,12 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [demoMode]);
 
   if (state.status === 'loading') {
     return (
       <main>
-        <header>
-          <h1>Keeper League Intelligence</h1>
-        </header>
+        <PageHeader demoMode={demoMode} />
         <section className="panel">
           <h2>Loading the league…</h2>
           <p className="muted">Reading players, keepers and pick inventory.</p>
@@ -64,9 +72,7 @@ export function App() {
   if (state.status === 'failed') {
     return (
       <main>
-        <header>
-          <h1>Keeper League Intelligence</h1>
-        </header>
+        <PageHeader demoMode={demoMode} />
         <section className="panel tone-error">
           <h2>Could not load the league</h2>
           <p>{state.message}</p>
@@ -79,14 +85,20 @@ export function App() {
     );
   }
 
-  return <Dashboard context={state.context} />;
+  return <Dashboard context={state.context} demoMode={demoMode} />;
 }
 
 /**
  * The dashboard proper. Takes a fully assembled context so it can be rendered in a test
  * without a database.
  */
-export function Dashboard({ context }: { context: AppContext }) {
+export function Dashboard({
+  context,
+  demoMode = false,
+}: {
+  context: AppContext;
+  demoMode?: boolean;
+}) {
   const [trackerState, setTrackerState] = useState<DraftTrackerState>(() =>
     context.tracker.getState(),
   );
@@ -163,12 +175,11 @@ export function Dashboard({ context }: { context: AppContext }) {
 
   return (
     <main>
-      <header>
-        <h1>Keeper League Intelligence</h1>
+      <PageHeader demoMode={demoMode}>
         <button type="button" onClick={() => void context.tracker.refreshNow()}>
           Refresh now
         </button>
-      </header>
+      </PageHeader>
 
       <DataSourcePanel
         context={context}
@@ -203,6 +214,45 @@ export function Dashboard({ context }: { context: AppContext }) {
   );
 }
 
+function PageHeader({ demoMode, children }: { demoMode: boolean; children?: ReactNode }) {
+  return (
+    <header>
+      <h1>Keeper League Intelligence</h1>
+      <div className="header-actions">
+        {children}
+        <button type="button" onClick={demoMode ? openLiveLeague : openMockDraftDemo}>
+          {demoMode ? 'Live league' : 'Mock draft demo'}
+        </button>
+      </div>
+    </header>
+  );
+}
+
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function readDemoMode(): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+  return new URL(window.location.href).searchParams.get('demo') === MOCK_DRAFT_DEMO_PARAM;
+}
+
+function openMockDraftDemo(): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  const url = new URL(window.location.href);
+  url.searchParams.set('demo', MOCK_DRAFT_DEMO_PARAM);
+  window.location.assign(url.toString());
+}
+
+function openLiveLeague(): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  const url = new URL(window.location.href);
+  url.searchParams.delete('demo');
+  window.location.assign(url.toString());
 }

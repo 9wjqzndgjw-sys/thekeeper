@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createMockDraftRehearsal } from './mock-draft.js';
+import { createMockDraftRehearsal } from './index.js';
 
 describe('createMockDraftRehearsal', () => {
   const rehearsal = createMockDraftRehearsal();

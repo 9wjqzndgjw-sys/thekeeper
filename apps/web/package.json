@@ -13,6 +13,7 @@
     "@keeper/domain": "*",
     "@keeper/draft-tracker": "*",
     "@keeper/keeper-optimizer": "*",
+    "@keeper/mock-draft": "*",
     "@keeper/persistence": "*",
     "@keeper/sleeper-adapter": "*",
     "@keeper/test-fixtures": "*",

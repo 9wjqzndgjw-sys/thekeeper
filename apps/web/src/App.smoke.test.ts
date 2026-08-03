@@ -4,7 +4,11 @@ import { describe, expect, it } from 'vitest';
 import type { LeagueStateSnapshot, Player, PlayerId } from '@keeper/domain';
 import { createSyntheticLeagueSnapshot } from '@keeper/test-fixtures';
 import { Dashboard } from './App.js';
-import { createAppContext, createFixtureAppContext } from './app-state.js';
+import {
+  createAppContext,
+  createFixtureAppContext,
+  createMockDraftAppContext,
+} from './app-state.js';
 
 /**
  * Renders the real component tree to markup. Server rendering skips effects, so this does
@@ -56,6 +60,17 @@ describe('Dashboard', () => {
 
   it('shows the replacement levels every value on the page is measured against', () => {
     expect(markup).toContain('Replacement level');
+  });
+
+  it('can render the league-scale mock draft demo used by the deployed site', () => {
+    const demoMarkup = renderToStaticMarkup(
+      createElement(Dashboard, { context: createMockDraftAppContext(), demoMode: true }),
+    );
+
+    expect(demoMarkup).toContain('Mock Draft Rehearsal League');
+    expect(demoMarkup).toContain('Mock draft demo');
+    expect(demoMarkup).toContain('36 declared');
+    expect(demoMarkup).toContain('Live board');
   });
 });
 

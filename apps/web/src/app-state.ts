@@ -10,6 +10,7 @@ import {
   createSleeperSelectionFetcher,
   type DraftTracker,
   type SleeperDraftPickLike,
+  type TrackedSelection,
 } from '@keeper/draft-tracker';
 import {
   optimizeKeeperCombinations,
@@ -26,6 +27,7 @@ import {
 } from '@keeper/valuation';
 import { createAnonClient, loadLeagueSnapshot } from '@keeper/persistence';
 import { createSleeperAdapter } from '@keeper/sleeper-adapter';
+import { createMockDraftRehearsal } from '@keeper/mock-draft';
 import { createSyntheticLeagueSnapshot, players as fixturePlayers } from '@keeper/test-fixtures';
 
 /**
@@ -80,6 +82,7 @@ export function createAppContext(input: {
   declaredPlayerIds?: Iterable<string>;
   source: AppContext['source'];
   caveats?: readonly string[];
+  tracker?: DraftTracker;
 }): AppContext {
   const { snapshot } = input;
   const projectionSource = createSnapshotProjectionSource(snapshot);
@@ -116,7 +119,7 @@ export function createAppContext(input: {
     declaredPlayerIds,
     source: input.source,
     caveats: [...(input.caveats ?? [])],
-    tracker: createTracker(snapshot),
+    tracker: input.tracker ?? createTracker(snapshot),
   };
 
   const expectedKeepers = projectLeagueKeepers(context);
@@ -304,6 +307,46 @@ export function createFixtureAppContext(): AppContext {
 }
 
 /**
+ * A browser-visible draft-night rehearsal. It uses the same staged 12x15 mock as the CLI
+ * command, but feeds it through a tracker with a short polling cadence so the Live board
+ * moves on screen without a real Sleeper room.
+ */
+export function createMockDraftAppContext(): AppContext {
+  const rehearsal = createMockDraftRehearsal();
+  const draftId = rehearsal.snapshot.draft?.sleeperDraftId ?? 'draft-mock-draft-2026';
+  let stageIndex = 1;
+
+  return createAppContext({
+    snapshot: rehearsal.snapshot,
+    players: rehearsal.players,
+    declaredPlayerIds: rehearsal.snapshot.keeperRights.map((right) => String(right.playerId)),
+    source: 'fixture',
+    caveats: [
+      'Mock draft demo: staged synthetic 12x15 replay. The board advances on polling or Refresh now.',
+      'This is synthetic demonstration data, not your league.',
+    ],
+    tracker: createDraftTracker({
+      draftId,
+      initialSelections: toTrackedSelections(draftId, rehearsal.stages[0]?.picks ?? []),
+      fetchSelections: createSleeperSelectionFetcher(
+        {
+          getDraftPicks: async () => {
+            const stage = rehearsal.stages[Math.min(stageIndex, rehearsal.stages.length - 1)]!;
+            stageIndex += 1;
+            return { data: stage.picks };
+          },
+        },
+        draftId,
+      ),
+      intervalMs: 2_000,
+      hiddenIntervalMs: 10_000,
+      staleAfterMs: 12_000,
+      jitterRatio: 0,
+    }),
+  });
+}
+
+/**
  * Polls the real Sleeper draft when the season has one. Before a draft is created there is
  * nothing to poll, so the tracker is pointed at an empty source rather than a scripted one:
  * a demo drip of fake picks on a page showing real data would be indistinguishable from a
@@ -342,4 +385,21 @@ function createTracker(snapshot: LeagueStateSnapshot): DraftTracker {
     ),
     intervalMs: 15_000,
   });
+}
+
+function toTrackedSelections(
+  draftId: string,
+  picks: readonly SleeperDraftPickLike[],
+): TrackedSelection[] {
+  return picks.map((pick) => ({
+    draftId,
+    overallPick: pick.pickNo,
+    round: pick.round,
+    slot: pick.draftSlot,
+    rosterId: pick.rosterId,
+    playerId: pick.sleeperPlayerId,
+    isKeeper: pick.isKeeper,
+    source: 'api',
+    recordedAt: '2026-08-30T17:30:00.000Z',
+  }));
 }

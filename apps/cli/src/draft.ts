@@ -6,9 +6,9 @@ import {
   type TrackedSelection,
 } from '@keeper/draft-tracker';
 import type { DraftPickAsset, FranchiseId } from '@keeper/domain';
+import { createMockDraftRehearsal } from '@keeper/mock-draft';
 import { createSnapshotProjectionSource } from '@keeper/valuation';
 import { renderLiveBoard } from './draft-board.js';
-import { createMockDraftRehearsal } from './mock-draft.js';
 
 /**
  * Replays a 12-team, 15-round mock draft through the real tracker. The source is synthetic,
