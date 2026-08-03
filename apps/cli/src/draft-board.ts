@@ -17,15 +17,18 @@ export interface RenderLiveBoardInput {
 export function renderLiveBoard(input: RenderLiveBoardInput): string[] {
   const rows =
     input.limit === undefined ? input.board.rows : input.board.rows.slice(0, input.limit);
+  const manualPickCount = input.selections.filter(
+    (selection) => selection.source === 'manual',
+  ).length;
+  const keeperPickCount = input.selections.filter((selection) => selection.isKeeper).length;
+  const livePickCount = input.selections.length - keeperPickCount;
 
   return [
     '## Draft Status',
     `- Last successful sync: ${input.lastSuccessfulSyncAt ?? 'never'}`,
     `- Freshness: ${input.stale ? 'STALE - showing last known good board' : 'current'}`,
     `- Consecutive failures: ${input.consecutiveFailureCount}`,
-    `- Picks recorded: ${input.selections.length} (${
-      input.selections.filter((selection) => selection.source === 'manual').length
-    } entered manually)`,
+    `- Pick slots recorded: ${input.selections.length} (${keeperPickCount} keepers, ${livePickCount} live, ${manualPickCount} entered manually)`,
     `- Players available: ${input.board.availablePlayerCount}`,
     ...(input.userNextOverallPick === undefined
       ? []
