@@ -40,30 +40,42 @@ export interface LoadProjectionsInput {
   seasonId: SeasonId;
 }
 
-const SKILL_COLUMNS = {
-  name: 1,
-  position: 2,
-  team: 3,
-  adp: 6,
-  passYards: 13,
-  passTouchdowns: 14,
-  interceptions: 15,
-  rushYards: 17,
-  rushTouchdowns: 18,
-  receptions: 20,
-  receivingYards: 21,
-  receivingTouchdowns: 22,
-} as const;
+interface SkillColumns {
+  name: number;
+  position: number;
+  team: number;
+  adp: number;
+  passYards: number;
+  passTouchdowns: number;
+  interceptions: number;
+  rushYards: number;
+  rushTouchdowns: number;
+  receptions: number;
+  receivingYards: number;
+  receivingTouchdowns: number;
+}
 
-const DEFENSE_COLUMNS = {
-  name: 1,
-  team: 3,
-  sacks: 11,
-  defenseInterceptions: 12,
-  fumbleRecoveries: 13,
-  defenseTouchdowns: 14,
-  specialTeamsTouchdowns: 15,
-} as const;
+interface DefenseColumns {
+  name: number;
+  team: number;
+  sacks: number;
+  defenseInterceptions: number;
+  fumbleRecoveries: number;
+  defenseTouchdowns: number;
+  specialTeamsTouchdowns: number;
+}
+
+/**
+ * The passing block, which is what anchors every stat column in a skill export.
+ *
+ * Column names in these files are not unique -- ATT, YDS and TD each appear three times,
+ * once per phase -- so a stat cannot be found by name alone. The passing group is the only
+ * unambiguous sequence, and rushing and receiving follow it in a fixed order, so locating
+ * it locates everything.
+ */
+const PASSING_SEQUENCE = ['ATT', 'CMP', 'YDS', 'TD', 'INT'] as const;
+const RUSHING_SEQUENCE = ['ATT', 'YDS', 'TD'] as const;
+const RECEIVING_SEQUENCE = ['TGT', 'REC', 'YDS', 'TD'] as const;
 
 const SUPPORTED_POSITIONS = new Set<Position>(['QB', 'RB', 'WR', 'TE', 'DEF']);
 
@@ -124,9 +136,17 @@ export function loadProjections(input: LoadProjectionsInput): LoadedProjections 
     }
   };
 
-  for (const row of dataRows(parseCsv(input.skillPositionCsv))) {
-    const name = row[SKILL_COLUMNS.name]?.trim();
-    const rawPosition = row[SKILL_COLUMNS.position]?.trim().toUpperCase();
+  const skillRows = parseCsv(input.skillPositionCsv);
+  const skillColumns = resolveSkillColumns(skillRows[0] ?? [], diagnostics);
+
+  // Nothing is read when the header could not be resolved: a diagnostic already says why,
+  // and guessing at the layout is how wrong stats get reported as confident totals.
+  for (const row of skillColumns === null ? [] : dataRows(skillRows)) {
+    if (skillColumns === null) {
+      continue;
+    }
+    const name = row[skillColumns.name]?.trim();
+    const rawPosition = row[skillColumns.position]?.trim().toUpperCase();
     if (!name || !rawPosition) {
       continue;
     }
@@ -141,41 +161,47 @@ export function loadProjections(input: LoadProjectionsInput): LoadedProjections 
       continue;
     }
 
-    const adp = parseNumericCell(row[SKILL_COLUMNS.adp]);
+    const adp = parseNumericCell(row[skillColumns.adp]);
     record(
       name,
       position,
-      row[SKILL_COLUMNS.team]?.trim() ?? '',
+      row[skillColumns.team]?.trim() ?? '',
       {
-        passYards: parseNumericCell(row[SKILL_COLUMNS.passYards]),
-        passTouchdowns: parseNumericCell(row[SKILL_COLUMNS.passTouchdowns]),
-        interceptions: parseNumericCell(row[SKILL_COLUMNS.interceptions]),
-        rushYards: parseNumericCell(row[SKILL_COLUMNS.rushYards]),
-        rushTouchdowns: parseNumericCell(row[SKILL_COLUMNS.rushTouchdowns]),
-        receptions: parseNumericCell(row[SKILL_COLUMNS.receptions]),
-        receivingYards: parseNumericCell(row[SKILL_COLUMNS.receivingYards]),
-        receivingTouchdowns: parseNumericCell(row[SKILL_COLUMNS.receivingTouchdowns]),
+        passYards: parseNumericCell(row[skillColumns.passYards]),
+        passTouchdowns: parseNumericCell(row[skillColumns.passTouchdowns]),
+        interceptions: parseNumericCell(row[skillColumns.interceptions]),
+        rushYards: parseNumericCell(row[skillColumns.rushYards]),
+        rushTouchdowns: parseNumericCell(row[skillColumns.rushTouchdowns]),
+        receptions: parseNumericCell(row[skillColumns.receptions]),
+        receivingYards: parseNumericCell(row[skillColumns.receivingYards]),
+        receivingTouchdowns: parseNumericCell(row[skillColumns.receivingTouchdowns]),
       },
       adp > 0 ? adp : null,
     );
   }
 
   if (input.defenseCsv !== undefined) {
-    for (const row of dataRows(parseCsv(input.defenseCsv))) {
-      const name = row[DEFENSE_COLUMNS.name]?.trim();
+    const defenseRows = parseCsv(input.defenseCsv);
+    const defenseColumns = resolveDefenseColumns(defenseRows[0] ?? [], diagnostics);
+
+    for (const row of defenseColumns === null ? [] : dataRows(defenseRows)) {
+      if (defenseColumns === null) {
+        continue;
+      }
+      const name = row[defenseColumns.name]?.trim();
       if (!name) {
         continue;
       }
       record(
         name,
         'DEF',
-        row[DEFENSE_COLUMNS.team]?.trim() ?? '',
+        row[defenseColumns.team]?.trim() ?? '',
         {
-          sacks: parseNumericCell(row[DEFENSE_COLUMNS.sacks]),
-          defenseInterceptions: parseNumericCell(row[DEFENSE_COLUMNS.defenseInterceptions]),
-          fumbleRecoveries: parseNumericCell(row[DEFENSE_COLUMNS.fumbleRecoveries]),
-          defenseTouchdowns: parseNumericCell(row[DEFENSE_COLUMNS.defenseTouchdowns]),
-          specialTeamsTouchdowns: parseNumericCell(row[DEFENSE_COLUMNS.specialTeamsTouchdowns]),
+          sacks: parseNumericCell(row[defenseColumns.sacks]),
+          defenseInterceptions: parseNumericCell(row[defenseColumns.defenseInterceptions]),
+          fumbleRecoveries: parseNumericCell(row[defenseColumns.fumbleRecoveries]),
+          defenseTouchdowns: parseNumericCell(row[defenseColumns.defenseTouchdowns]),
+          specialTeamsTouchdowns: parseNumericCell(row[defenseColumns.specialTeamsTouchdowns]),
         },
         null,
       );
@@ -198,6 +224,144 @@ export function loadProjections(input: LoadProjectionsInput): LoadedProjections 
     diagnostics,
     unscorableLeagueRules,
   };
+}
+
+/** Case-insensitive header lookup. Returns -1 when the column is absent. */
+function headerIndex(header: readonly string[], name: string): number {
+  return header.findIndex((column) => column?.trim().toUpperCase() === name);
+}
+
+/** Where a run of consecutive column names begins, or -1. */
+function sequenceIndex(header: readonly string[], sequence: readonly string[]): number {
+  for (let start = 0; start + sequence.length <= header.length; start += 1) {
+    if (sequence.every((name, offset) => header[start + offset]?.trim().toUpperCase() === name)) {
+      return start;
+    }
+  }
+  return -1;
+}
+
+function matchesAt(header: readonly string[], at: number, sequence: readonly string[]): boolean {
+  return sequence.every((name, offset) => header[at + offset]?.trim().toUpperCase() === name);
+}
+
+/**
+ * Resolves the skill export's columns from its header rather than trusting their positions.
+ *
+ * Fixed indices read the right cells only for the exact layout they were written against. A
+ * source that adds a column, or an export taken with different options, shifts every stat by
+ * one and the engine reports confident totals for the wrong fields -- a failure with no
+ * symptom, because the numbers still look like plausible projections.
+ */
+function resolveSkillColumns(
+  header: readonly string[],
+  diagnostics: ProjectionDiagnostic[],
+): SkillColumns | null {
+  const name = headerIndex(header, 'NAME');
+  const position = headerIndex(header, 'POS');
+  const team = headerIndex(header, 'TEAM');
+
+  if (name === -1 || position === -1 || team === -1) {
+    diagnostics.push({
+      level: 'error',
+      code: 'unexpected_header',
+      message:
+        'The skill projection export has no Name, POS and Team columns, so no player could ' +
+        `be identified. Header was: ${header.join(', ')}`,
+    });
+    return null;
+  }
+
+  const passing = sequenceIndex(header, PASSING_SEQUENCE);
+  const rushing = passing + PASSING_SEQUENCE.length;
+  const receiving = rushing + RUSHING_SEQUENCE.length;
+
+  if (
+    passing === -1 ||
+    !matchesAt(header, rushing, RUSHING_SEQUENCE) ||
+    !matchesAt(header, receiving, RECEIVING_SEQUENCE)
+  ) {
+    diagnostics.push({
+      level: 'error',
+      code: 'missing_stat_columns',
+      message:
+        'The skill projection export does not carry the expected passing, rushing and ' +
+        `receiving stat blocks, so nothing could be rescored. Expected ${[
+          ...PASSING_SEQUENCE,
+          ...RUSHING_SEQUENCE,
+          ...RECEIVING_SEQUENCE,
+        ].join(', ')} in order; header was: ${header.join(', ')}`,
+    });
+    return null;
+  }
+
+  return {
+    name,
+    position,
+    team,
+    adp: headerIndex(header, 'ADP'),
+    passYards: passing + 2,
+    passTouchdowns: passing + 3,
+    interceptions: passing + 4,
+    rushYards: rushing + 1,
+    rushTouchdowns: rushing + 2,
+    receptions: receiving + 1,
+    receivingYards: receiving + 2,
+    receivingTouchdowns: receiving + 3,
+  };
+}
+
+/** Defence column names are unique, so these resolve by name directly. */
+function resolveDefenseColumns(
+  header: readonly string[],
+  diagnostics: ProjectionDiagnostic[],
+): DefenseColumns | null {
+  const name = headerIndex(header, 'NAME');
+  const team = headerIndex(header, 'TEAM');
+
+  if (name === -1 || team === -1) {
+    diagnostics.push({
+      level: 'error',
+      code: 'unexpected_header',
+      message:
+        'The defence projection export has no Name and Team columns, so no defence could be ' +
+        `identified. Header was: ${header.join(', ')}`,
+    });
+    return null;
+  }
+
+  const columns: DefenseColumns = {
+    name,
+    team,
+    sacks: headerIndex(header, 'SACK'),
+    defenseInterceptions: headerIndex(header, 'INT'),
+    fumbleRecoveries: headerIndex(header, 'FR'),
+    defenseTouchdowns: headerIndex(header, 'DTD'),
+    specialTeamsTouchdowns: headerIndex(header, 'STD'),
+  };
+
+  const missing = (
+    [
+      'sacks',
+      'defenseInterceptions',
+      'fumbleRecoveries',
+      'defenseTouchdowns',
+      'specialTeamsTouchdowns',
+    ] as const
+  ).filter((key) => columns[key] === -1);
+
+  if (missing.length > 0) {
+    diagnostics.push({
+      level: 'error',
+      code: 'missing_stat_columns',
+      message:
+        `The defence projection export is missing ${missing.length} stat column(s) ` +
+        `(${missing.join(', ')}), so defences could not be rescored. Header was: ${header.join(', ')}`,
+    });
+    return null;
+  }
+
+  return columns;
 }
 
 /** Drops the header row, identified by its literal first cell rather than by position. */

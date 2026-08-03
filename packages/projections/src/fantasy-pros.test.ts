@@ -163,3 +163,81 @@ describe('the real exported files', () => {
     expect(loaded.playerSeasons.every((season) => (season.projectedPoints ?? 0) > 0)).toBe(true);
   });
 });
+
+describe('header resolution', () => {
+  const scoring = {
+    pass_td: 6,
+    pass_yd: 0.04,
+    rush_yd: 0.1,
+    rush_td: 6,
+    rec: 0.5,
+    rec_yd: 0.1,
+    rec_td: 6,
+  };
+  const seasonId = 'season-2026' as SeasonId;
+
+  const header =
+    '"RK","Name","POS","Team","Bye","POS","ADP","FPTS","G","FPTS/G","TIER",' +
+    '"ATT","CMP","YDS","TD","INT","ATT","YDS","TD","TGT","REC","YDS","TD"';
+  const row =
+    '"1","Test Back","RB","DET","6","RB1","1.6","300","15","20","1",' +
+    '"0","0","0","0","0","250","1200","10","80","60","500","3"';
+
+  it('reads stats from the header rather than fixed positions', () => {
+    const loaded = loadProjections({ skillPositionCsv: `${header}\n${row}`, scoring, seasonId });
+
+    expect(loaded.diagnostics.filter((entry) => entry.level === 'error')).toEqual([]);
+    // 1200 rush yards + 10 rush TD + 60 rec + 500 rec yards + 3 rec TD.
+    expect(loaded.playerSeasons[0]!.projectedPoints).toBeCloseTo(120 + 60 + 30 + 50 + 18);
+  });
+
+  it('survives a column inserted before the stat blocks', () => {
+    // The failure fixed indices could not survive, and the reason it had no symptom: every
+    // stat shifts by one and the totals still look like plausible projections.
+    const shiftedHeader = header.replace('"TIER",', '"TIER","NEW",');
+    const shiftedRow = row.replace('"1",\n', '"1",').replace('"20","1",', '"20","1","x",');
+    const loaded = loadProjections({
+      skillPositionCsv: `${shiftedHeader}\n${shiftedRow}`,
+      scoring,
+      seasonId,
+    });
+
+    expect(loaded.diagnostics.filter((entry) => entry.level === 'error')).toEqual([]);
+    expect(loaded.playerSeasons[0]!.projectedPoints).toBeCloseTo(120 + 60 + 30 + 50 + 18);
+  });
+
+  it('reports a header it cannot recognise instead of reading it anyway', () => {
+    const loaded = loadProjections({
+      skillPositionCsv: '"RK","Player","Club"\n"1","Test Back","DET"',
+      scoring,
+      seasonId,
+    });
+
+    expect(loaded.players).toEqual([]);
+    expect(loaded.diagnostics.some((entry) => entry.code === 'unexpected_header')).toBe(true);
+  });
+
+  it('reports missing stat blocks instead of scoring everyone at zero', () => {
+    const loaded = loadProjections({
+      skillPositionCsv: '"RK","Name","POS","Team"\n"1","Test Back","RB","DET"',
+      scoring,
+      seasonId,
+    });
+
+    expect(loaded.players).toEqual([]);
+    expect(loaded.diagnostics.some((entry) => entry.code === 'missing_stat_columns')).toBe(true);
+  });
+
+  it('reports a defence export missing its stat columns', () => {
+    const loaded = loadProjections({
+      skillPositionCsv: `${header}\n${row}`,
+      defenseCsv: '"RK","Name","POS","Team"\n"1","Houston Texans","DST","HST"',
+      scoring,
+      seasonId,
+    });
+
+    expect(loaded.diagnostics.some((entry) => entry.code === 'missing_stat_columns')).toBe(true);
+    // The skill file still loaded; one bad export does not take the other down.
+    expect(loaded.players).toHaveLength(1);
+  });
+});
