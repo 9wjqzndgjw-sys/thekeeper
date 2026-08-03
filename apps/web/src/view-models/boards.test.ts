@@ -127,14 +127,14 @@ describe('buildBoards', () => {
     expect(live.board.availablePlayerCount).toBe(2);
   });
 
-  it('keeps keepers off the live board as well as recorded picks', () => {
-    // The live board is the landing view. Built from selections alone it showed the whole
-    // pool before the first pick -- headed by whichever keeper was the best player in the
-    // league, a recommendation for someone nobody can draft.
+  it('keeps declared keepers off the live board as well as recorded picks', () => {
+    // The live board is what gets read during a draft. Built from selections alone it opened
+    // on the whole pool -- headed by whichever keeper was the best player in the league, a
+    // recommendation for somebody nobody can draft.
     const live = board(
       {
         ...baseInput,
-        declaredKeeperRights: [],
+        declaredKeeperRights: [keeperRight('p-1')],
         expectedKeeperRights: [keeperRight('p-1')],
         selections: [],
       },
@@ -146,12 +146,30 @@ describe('buildBoards', () => {
     expect(live.caveats[0]).toMatch(/no picks have been recorded/i);
   });
 
-  it('removes keepers and recorded picks together once the draft is running', () => {
+  it('shows a forecast keeper his manager did not declare', () => {
+    // The live board must not hide a draftable player behind a prediction. If the optimizer
+    // said someone should be kept and his manager released him instead, he is in the draft,
+    // and a board that removed him would quietly deny a real pick.
     const live = board(
       {
         ...baseInput,
         declaredKeeperRights: [],
         expectedKeeperRights: [keeperRight('p-1')],
+        selections: [],
+      },
+      'live',
+    );
+
+    expect(live.board.rows.some((row) => row.fullName === 'Kept Star')).toBe(true);
+    expect(live.board.availablePlayerCount).toBe(3);
+  });
+
+  it('removes declared keepers and recorded picks together once the draft is running', () => {
+    const live = board(
+      {
+        ...baseInput,
+        declaredKeeperRights: [keeperRight('p-1')],
+        expectedKeeperRights: [],
         selections: [selection('s-2')],
       },
       'live',

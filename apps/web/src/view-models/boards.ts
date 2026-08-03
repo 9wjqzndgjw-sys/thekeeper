@@ -122,19 +122,22 @@ export function buildBoards(input: BuildBoardsInput): BoardViewModel[] {
     {
       mode: 'live',
       title: 'Live board',
-      poolDescription: `Pool with ${input.expectedKeeperRights.length} keeper(s) and ${input.selections.length} recorded pick(s) removed.`,
-      // Keepers are subtracted here as well as the recorded picks. A kept player never
-      // enters the draft, so a live board built from selections alone shows him as the best
-      // thing available -- and before the first pick is made that is the entire pool,
-      // topped by whichever keeper is the best player in the league.
+      poolDescription: `Pool with ${input.declaredKeeperRights.length} declared keeper(s) and ${input.selections.length} recorded pick(s) removed.`,
+      // Declared keepers, not forecast ones. Keepers have to come off -- a kept player never
+      // reaches the draft, and a board built from selections alone would open by
+      // recommending whoever the best keeper in the league is.
+      //
+      // But the forecast is the wrong source once this board matters. It says who *should*
+      // be kept, and a manager who ignored that advice and released someone leaves a real,
+      // draftable player hidden behind a prediction. Declarations are what actually happened.
       board: computeLiveDraftBoard({
         ...shared,
-        pickValueCurve: input.pickValueCurveAssumingExpected,
-        selections: [...asSelections(input.expectedKeeperRights), ...input.selections],
+        pickValueCurve: input.pickValueCurveAssumingDeclarations,
+        selections: [...asSelections(input.declaredKeeperRights), ...input.selections],
       }),
       caveats:
         input.selections.length === 0
-          ? ['No picks have been recorded yet, so this is the expected post-keeper pool.']
+          ? ['No picks have been recorded yet, so this is the declared post-keeper pool.']
           : [],
     },
   ];

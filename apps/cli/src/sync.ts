@@ -232,22 +232,51 @@ const declaredRights = persistableRights.filter((right) => declared.has(String(r
 // Order is forced by the foreign keys. Rights are written first so decisions can reference
 // them, decisions are replaced next, and only then are stale rights and picks pruned --
 // deleting a right or a pick still referenced by a decision would be rejected.
+// Whether this import is entitled to speak for the whole season.
+//
+// `importSeasonDraftState` returns an error diagnostic and an empty pick inventory when it
+// cannot find or read the draft, and that is a recoverable condition -- a rate limit, a
+// draft not yet created. Replacing on it deletes all 180 stored picks. An empty prior draft
+// does the same to every keeper right and declaration. A failed read is not a statement
+// that the season is empty, so partial imports fall back to merging and say so.
+const importErrors = imported.diagnostics.filter((diagnostic) => diagnostic.level === 'error');
+const inventoryIsAuthoritative = importErrors.length === 0 && imported.pickInventory.length > 0;
+const rightsAreAuthoritative = keeperRights.length > 0;
+
+for (const diagnostic of importErrors) {
+  console.warn(`  [${diagnostic.code}] ${diagnostic.message}`);
+}
+
 await repository.saveKeeperRights(persistableRights);
 
-const decisions = await repository.replaceKeeperDecisions(
+const decisionRecords = declaredRights.map((right) => ({
   seasonId,
-  declaredRights.map((right) => ({
-    seasonId,
-    franchiseId: String(right.franchiseId),
-    playerId: String(right.playerId),
-    keeperRightId: String(right.id),
-    resolvedPickAssetId: null,
-    source: 'sleeper' as const,
-    declaredAt: null,
-  })),
-);
-const rights = await repository.replaceKeeperRights(seasonId, persistableRights);
-const picks = await repository.replacePickInventory(seasonId, imported.pickInventory);
+  franchiseId: String(right.franchiseId),
+  playerId: String(right.playerId),
+  keeperRightId: String(right.id),
+  resolvedPickAssetId: null,
+  source: 'sleeper' as const,
+  declaredAt: null,
+}));
+
+const decisions = rightsAreAuthoritative
+  ? await repository.replaceKeeperDecisions(seasonId, decisionRecords)
+  : { written: await repository.saveKeeperDecisions(decisionRecords), removed: 0 };
+
+const rights = rightsAreAuthoritative
+  ? await repository.replaceKeeperRights(seasonId, persistableRights)
+  : { written: await repository.saveKeeperRights(persistableRights), removed: 0 };
+
+const picks = inventoryIsAuthoritative
+  ? await repository.replacePickInventory(seasonId, imported.pickInventory)
+  : { written: await repository.savePickInventory(imported.pickInventory), removed: 0 };
+
+if (!inventoryIsAuthoritative || !rightsAreAuthoritative) {
+  console.warn(
+    '\n  This import was incomplete, so stored rows it did not mention were left in place ' +
+      'rather than deleted. Re-run once the underlying problem is fixed.',
+  );
+}
 
 const pickCount = picks.written;
 const rightCount = rights.written;

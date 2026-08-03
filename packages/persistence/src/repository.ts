@@ -565,15 +565,25 @@ export class KeeperRepository {
     keyColumn: string,
     seasonId: SeasonId,
     keepKeys: ReadonlySet<string>,
+    /**
+     * Rows this import has no authority over, and must leave alone.
+     *
+     * An import speaks for what Sleeper says. A manual correction exists precisely because
+     * Sleeper is wrong about something, so reading its absence from the API as an
+     * instruction to delete it destroys the correction on the next sync -- and the reason
+     * someone made it is the reason it will not come back by itself.
+     */
+    preserveWhen?: { column: string; equals: string },
     batchSize = 100,
   ): Promise<number> {
-    const { data, error } = await this.client
-      .from(table)
-      .select(keyColumn)
-      .eq('season_id', seasonId);
+    const columns = preserveWhen ? `${keyColumn}, ${preserveWhen.column}` : keyColumn;
+    const { data, error } = await this.client.from(table).select(columns).eq('season_id', seasonId);
     unwrap(`read ${table} keys`, error);
 
     const stale = ((data ?? []) as unknown as Record<string, unknown>[])
+      .filter(
+        (row) => preserveWhen === undefined || row[preserveWhen.column] !== preserveWhen.equals,
+      )
       .map((row) => String(row[keyColumn]))
       .filter((key) => !keepKeys.has(key));
 
@@ -600,6 +610,7 @@ export class KeeperRepository {
       'id',
       seasonId,
       new Set(rights.map((right) => String(right.id))),
+      { column: 'source_type', equals: 'manual_override' },
     );
     return { written, removed };
   }
@@ -620,6 +631,7 @@ export class KeeperRepository {
       'player_id',
       seasonId,
       new Set(decisions.map((decision) => String(decision.playerId))),
+      { column: 'source', equals: 'manual' },
     );
     return { written, removed };
   }

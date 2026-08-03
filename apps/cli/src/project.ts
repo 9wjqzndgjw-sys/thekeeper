@@ -85,6 +85,24 @@ if (matched.unmatchedProjectionNames.length > 0) {
   console.log(`  ${matched.unmatchedProjectionNames.slice(0, 12).join(', ')}`);
 }
 
+// Replacement is only safe when the load actually succeeded.
+//
+// The parser refuses to guess at an unreadable export and returns no players, which is
+// right -- but replacing on that result deletes the last good projections and leaves the
+// season empty or, worse, defences only. A file that could not be read is not a statement
+// that the season has no players in it.
+const loadErrors = loaded.diagnostics.filter((diagnostic) => diagnostic.level === 'error');
+if (loadErrors.length > 0 || loaded.players.length === 0) {
+  console.error('\nRefusing to replace stored projections; nothing was written.');
+  for (const diagnostic of loadErrors) {
+    console.error(`  [${diagnostic.code}] ${diagnostic.message}`);
+  }
+  if (loadErrors.length === 0) {
+    console.error('  The export produced no players at all.');
+  }
+  process.exit(1);
+}
+
 // Replaced rather than merged: a player dropped from the export should leave the board,
 // not linger on last week's projection.
 const { written, removed } = await repository.replacePlayerSeasons(
