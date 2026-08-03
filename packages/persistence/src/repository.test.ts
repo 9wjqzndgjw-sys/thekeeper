@@ -353,3 +353,80 @@ describe('replacePlayerSeasons', () => {
     ]);
   });
 });
+
+describe('decision links to keeper rights', () => {
+  // A right is dropped from the write when a manual override already covers that franchise
+  // and player. The decision built alongside it still named the imported right, and
+  // keeper_decisions references keeper_rights, so the insert failed and took the whole sync
+  // down: protecting a correction made the next import impossible.
+  it('points a decision at the manual right that replaced its imported one', () => {
+    const { client, tables } = fakeClient({
+      keeper_rights: [
+        {
+          season_id: seasonId,
+          id: 'manual-fix',
+          franchise_id: 'f1',
+          player_id: 'p1',
+          source_type: 'manual_override',
+        },
+      ],
+      keeper_decisions: [],
+    });
+
+    return new KeeperRepository(client)
+      .saveKeeperDecisions([
+        {
+          seasonId,
+          franchiseId: 'f1',
+          playerId: 'p1',
+          keeperRightId: 'imported-right-that-was-excluded',
+          resolvedPickAssetId: null,
+          source: 'sleeper',
+          declaredAt: null,
+        },
+      ])
+      .then(() => {
+        expect(tables.keeper_decisions![0]!.keeper_right_id).toBe('manual-fix');
+      });
+  });
+
+  it('drops the link rather than inventing one when no right matches', () => {
+    // A decision with no right is still a true statement that the player was declared.
+    const { client, tables } = fakeClient({ keeper_rights: [], keeper_decisions: [] });
+
+    return new KeeperRepository(client)
+      .saveKeeperDecisions([
+        {
+          seasonId,
+          franchiseId: 'f1',
+          playerId: 'p1',
+          keeperRightId: 'missing',
+          resolvedPickAssetId: null,
+          source: 'sleeper',
+          declaredAt: null,
+        },
+      ])
+      .then(() => {
+        expect(tables.keeper_decisions![0]!.keeper_right_id).toBeNull();
+      });
+  });
+
+  it('leaves an existing link alone', () => {
+    const { client, tables } = fakeClient({
+      keeper_rights: [
+        {
+          season_id: seasonId,
+          id: 'k-p1',
+          franchise_id: 'f1',
+          player_id: 'p1',
+          source_type: 'drafted',
+        },
+      ],
+      keeper_decisions: [],
+    });
+
+    return new KeeperRepository(client).saveKeeperDecisions([decision('p1')]).then(() => {
+      expect(tables.keeper_decisions![0]!.keeper_right_id).toBe('k-p1');
+    });
+  });
+});

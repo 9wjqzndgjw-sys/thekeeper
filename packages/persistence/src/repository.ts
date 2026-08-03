@@ -416,11 +416,13 @@ export class KeeperRepository {
     if (writableDecisions.length === 0) {
       return 0;
     }
+    const relinked = await this.relinkDecisionsToStoredRights(writableDecisions);
+
     unwrap(
       'keeper_decisions',
       (
         await this.client.from('keeper_decisions').upsert(
-          writableDecisions.map((decision) => ({
+          relinked.map((decision) => ({
             season_id: decision.seasonId,
             franchise_id: decision.franchiseId,
             player_id: decision.playerId,
@@ -433,7 +435,54 @@ export class KeeperRepository {
         )
       ).error,
     );
-    return writableDecisions.length;
+    return relinked.length;
+  }
+
+  /**
+   * Points each decision at a keeper right that actually exists.
+   *
+   * A right is dropped from the write when a manual override already covers the same
+   * franchise and player, which is correct -- the human correction wins. But the decision
+   * built alongside it still names the imported right's id, and `keeper_decisions`
+   * references `keeper_rights`, so the insert fails outright and takes the whole sync with
+   * it. Protecting a correction must not make the next import impossible.
+   *
+   * The manual right is the authoritative one for that player, so the decision is pointed at
+   * it. Where nothing matches at all the link is dropped rather than invented: a decision
+   * with no right is still a true statement that the player was declared.
+   */
+  private async relinkDecisionsToStoredRights(
+    decisions: readonly KeeperDecisionRecord[],
+  ): Promise<KeeperDecisionRecord[]> {
+    const seasonIds = new Set(decisions.map((decision) => String(decision.seasonId)));
+    const rightIds = new Set<string>();
+    const rightIdByIdentity = new Map<string, string>();
+
+    for (const seasonId of seasonIds) {
+      const { data, error } = await this.client
+        .from('keeper_rights')
+        .select('id, franchise_id, player_id')
+        .eq('season_id', seasonId);
+      unwrap('read keeper rights for decision links', error);
+
+      for (const row of (data ?? []) as unknown as Record<string, unknown>[]) {
+        rightIds.add(String(row.id));
+        rightIdByIdentity.set(
+          keeperRightIdentity(seasonId, row.franchise_id, row.player_id),
+          String(row.id),
+        );
+      }
+    }
+
+    return decisions.map((decision) => {
+      if (decision.keeperRightId === null || rightIds.has(decision.keeperRightId)) {
+        return decision;
+      }
+      const stored = rightIdByIdentity.get(
+        keeperRightIdentity(decision.seasonId, decision.franchiseId, decision.playerId),
+      );
+      return { ...decision, keeperRightId: stored ?? null };
+    });
   }
 
   /**
