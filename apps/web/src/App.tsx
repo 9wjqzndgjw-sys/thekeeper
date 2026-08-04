@@ -7,6 +7,14 @@ import {
   optimizeForFranchise,
   type AppContext,
 } from './app-state.js';
+import {
+  createRehearsal,
+  readRehearsal,
+  submitPick,
+  undoPick,
+  type Rehearsal,
+} from './rehearsal.js';
+import { OnTheClockPanel } from './components/on-the-clock.js';
 import { buildBoards, type BoardMode } from './view-models/boards.js';
 import { buildPickHorizon } from './view-models/pick-horizon.js';
 import { buildSyncStatus } from './view-models/sync-status.js';
@@ -26,6 +34,7 @@ type LoadState =
   | { status: 'failed'; message: string };
 
 const MOCK_DRAFT_DEMO_PARAM = 'mock-draft';
+const REHEARSE_PARAM = 'rehearse';
 
 /**
  * Loads the league, then renders it. The load is a real network read, so the three states
@@ -35,6 +44,7 @@ const MOCK_DRAFT_DEMO_PARAM = 'mock-draft';
 export function App() {
   const [state, setState] = useState<LoadState>({ status: 'loading' });
   const [demoMode] = useState(() => readDemoMode());
+  const [rehearse] = useState(() => readRehearseMode());
 
   useEffect(() => {
     let cancelled = false;
@@ -85,7 +95,7 @@ export function App() {
     );
   }
 
-  return <Dashboard context={state.context} demoMode={demoMode} />;
+  return <Dashboard context={state.context} demoMode={demoMode} rehearse={rehearse} />;
 }
 
 /**
@@ -95,13 +105,28 @@ export function App() {
 export function Dashboard({
   context,
   demoMode = false,
+  rehearse = false,
 }: {
   context: AppContext;
   demoMode?: boolean;
+  rehearse?: boolean;
 }) {
-  const [trackerState, setTrackerState] = useState<DraftTrackerState>(() =>
-    context.tracker.getState(),
+  // Built once per league. Rebuilding would restart the draft, which is the one thing a
+  // rehearsal must not do by accident.
+  const [rehearsal] = useState(() => (rehearse ? createRehearsal({ context }) : null));
+  const activeRehearsal = rehearsal && 'sim' in rehearsal ? rehearsal : null;
+  const rehearsalError = rehearsal && 'error' in rehearsal ? rehearsal.error : null;
+
+  // The rehearsal's own tracker replaces the polling one, so every panel below reads the
+  // simulated board through the same pipeline it uses for a real draft.
+  const tracker = activeRehearsal?.tracker ?? context.tracker;
+
+  const [rehearsalView, setRehearsalView] = useState(() =>
+    activeRehearsal ? readRehearsal(activeRehearsal) : null,
   );
+  const [busy, setBusy] = useState(false);
+
+  const [trackerState, setTrackerState] = useState<DraftTrackerState>(() => tracker.getState());
   // Re-renders the relative "synced Ns ago" reading without waiting on a poll.
   const [nowMs, setNowMs] = useState(() => Date.now());
   // The live board is only the interesting one once a draft is actually running. Landing on
@@ -112,19 +137,19 @@ export function Dashboard({
   const [franchiseId, setFranchiseId] = useState<FranchiseId>(context.snapshot.userFranchiseId);
 
   useEffect(() => {
-    const unsubscribe = context.tracker.subscribe((_events, state) => {
+    const unsubscribe = tracker.subscribe((_events, state) => {
       setTrackerState(state);
       setNowMs(Date.now());
     });
-    context.tracker.start();
+    tracker.start();
     const ticker = setInterval(() => setNowMs(Date.now()), 1_000);
 
     return () => {
       unsubscribe();
-      context.tracker.stop();
+      tracker.stop();
       clearInterval(ticker);
     };
-  }, [context]);
+  }, [tracker]);
 
   // Recommendations and the pick horizon both follow whichever team is being viewed. Only
   // the optimizer re-runs; the league itself is not re-read.
@@ -173,12 +198,30 @@ export function Dashboard({
 
   const visibleBoard = boards.find((board) => board.mode === activeBoard) ?? boards[0]!;
 
+  const franchiseName =
+    context.snapshot.franchises.find((franchise) => franchise.id === franchiseId)?.displayName ??
+    'your team';
+
+  // Awaited so the board a person sees after picking already includes everything the room
+  // did in response to it.
+  const runPick = (action: (rehearsal: Rehearsal) => Promise<void>) => {
+    if (!activeRehearsal || busy) {
+      return;
+    }
+    setBusy(true);
+    action(activeRehearsal)
+      .then(() => setRehearsalView(readRehearsal(activeRehearsal)))
+      .finally(() => setBusy(false));
+  };
+
   return (
     <main>
-      <PageHeader demoMode={demoMode}>
-        <button type="button" onClick={() => void context.tracker.refreshNow()}>
-          Refresh now
-        </button>
+      <PageHeader demoMode={demoMode} rehearsing={rehearse}>
+        {!rehearse && (
+          <button type="button" onClick={() => void tracker.refreshNow()}>
+            Refresh now
+          </button>
+        )}
       </PageHeader>
 
       <DataSourcePanel
@@ -191,6 +234,23 @@ export function Dashboard({
         snapshot={context.snapshot}
         replacementLevels={context.scenarios.replacementLevels}
       />
+      {rehearsalError && (
+        <section className="panel tone-error">
+          <h2>Cannot rehearse this league</h2>
+          <p>{rehearsalError}</p>
+        </section>
+      )}
+
+      {activeRehearsal && rehearsalView && (
+        <OnTheClockPanel
+          view={rehearsalView}
+          franchiseName={franchiseName}
+          busy={busy}
+          onPick={(playerId) => runPick((rehearsal) => submitPick(rehearsal, playerId))}
+          onUndo={() => runPick(undoPick)}
+        />
+      )}
+
       <PickHorizonPanel horizon={horizon} />
 
       <nav className="board-tabs">
@@ -214,12 +274,23 @@ export function Dashboard({
   );
 }
 
-function PageHeader({ demoMode, children }: { demoMode: boolean; children?: ReactNode }) {
+function PageHeader({
+  demoMode,
+  rehearsing = false,
+  children,
+}: {
+  demoMode: boolean;
+  rehearsing?: boolean;
+  children?: ReactNode;
+}) {
   return (
     <header>
       <h1>Keeper League Intelligence</h1>
       <div className="header-actions">
         {children}
+        <button type="button" onClick={rehearsing ? stopRehearsing : startRehearsing}>
+          {rehearsing ? 'Stop rehearsing' : 'Rehearse the draft'}
+        </button>
         <button type="button" onClick={demoMode ? openLiveLeague : openMockDraftDemo}>
           {demoMode ? 'Live league' : 'Mock draft demo'}
         </button>
@@ -237,6 +308,38 @@ function readDemoMode(): boolean {
     return false;
   }
   return new URL(window.location.href).searchParams.get('demo') === MOCK_DRAFT_DEMO_PARAM;
+}
+
+function readRehearseMode(): boolean {
+  if (typeof window === 'undefined') {
+    return false;
+  }
+  return new URL(window.location.href).searchParams.has(REHEARSE_PARAM);
+}
+
+/**
+ * Reloads rather than toggling in place.
+ *
+ * A rehearsal holds a draft in progress, and flipping it on or off mid-page would either
+ * abandon that state silently or resume one built against a different league. A reload
+ * makes the restart explicit.
+ */
+function startRehearsing(): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  const url = new URL(window.location.href);
+  url.searchParams.set(REHEARSE_PARAM, '1');
+  window.location.assign(url.toString());
+}
+
+function stopRehearsing(): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  const url = new URL(window.location.href);
+  url.searchParams.delete(REHEARSE_PARAM);
+  window.location.assign(url.toString());
 }
 
 function openMockDraftDemo(): void {
