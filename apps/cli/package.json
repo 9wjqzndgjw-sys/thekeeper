@@ -15,7 +15,8 @@
     "sync": "tsx src/sync.ts",
     "catalog": "tsx src/catalog.ts",
     "project": "tsx src/project.ts",
-    "keeper-values": "tsx src/keeper-values.ts"
+    "keeper-values": "tsx src/keeper-values.ts",
+    "pool": "tsx src/pool.ts"
   },
   "dependencies": {
     "@keeper/domain": "*",
@@ -26,6 +27,7 @@
     "@keeper/test-fixtures": "*",
     "@keeper/valuation": "*",
     "@keeper/projections": "*",
-    "@keeper/persistence": "*"
+    "@keeper/persistence": "*",
+    "@keeper/draft-sim": "*"
   }
 }
