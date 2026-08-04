@@ -325,6 +325,61 @@ describe('replacePickInventory', () => {
   });
 });
 
+describe('saveDraftSelections', () => {
+  const selection = (overallPick: number, playerId: string | null) => ({
+    sleeperDraftId: 'draft-2025',
+    seasonId: 'season:prior' as SeasonId,
+    overallPick,
+    round: 1,
+    slot: overallPick,
+    franchiseId: 'franchise:league:1:user:u1',
+    playerId,
+    isKeeper: false,
+    source: 'sleeper' as const,
+  });
+
+  it('keys on draft plus overall pick, so re-importing a draft updates in place', async () => {
+    const { client, tables } = fakeClient({ draft_selections: [] });
+    const repository = new KeeperRepository(client);
+
+    await repository.saveDraftSelections([selection(1, 'player:a'), selection(2, 'player:b')]);
+    // The same draft imported again, with pick 1 corrected to a different player.
+    await repository.saveDraftSelections([selection(1, 'player:c'), selection(2, 'player:b')]);
+
+    expect(tables.draft_selections).toHaveLength(2);
+    expect(tables.draft_selections).toEqual([
+      expect.objectContaining({ overall_pick: 1, player_id: 'player:c' }),
+      expect.objectContaining({ overall_pick: 2, player_id: 'player:b' }),
+    ]);
+  });
+
+  it('records a pick whose player could not be resolved rather than dropping it', async () => {
+    const { client, tables } = fakeClient({ draft_selections: [] });
+
+    const written = await new KeeperRepository(client).saveDraftSelections([selection(7, null)]);
+
+    expect(written).toBe(1);
+    expect(tables.draft_selections).toEqual([
+      expect.objectContaining({ overall_pick: 7, player_id: null, is_keeper: false }),
+    ]);
+  });
+
+  it('keeps two drafts apart at the same overall pick', async () => {
+    const { client, tables } = fakeClient({ draft_selections: [] });
+
+    await new KeeperRepository(client).saveDraftSelections([
+      selection(1, 'player:a'),
+      {
+        ...selection(1, 'player:b'),
+        sleeperDraftId: 'draft-2024',
+        seasonId: 'season:older' as SeasonId,
+      },
+    ]);
+
+    expect(tables.draft_selections).toHaveLength(2);
+  });
+});
+
 describe('replacePlayerSeasons', () => {
   it('removes omitted projections without touching another season', async () => {
     const { client, tables } = fakeClient({

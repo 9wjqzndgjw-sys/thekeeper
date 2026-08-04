@@ -75,6 +75,26 @@ export interface PlayerRecord {
   sleeperPlayerId: string | null;
 }
 
+/**
+ * One selection from a draft, current or historical.
+ *
+ * `franchiseId` and `playerId` are nullable because a completed draft is worth recording
+ * even where an identity cannot be resolved: a pick whose player has left the catalog is
+ * still evidence that the pick happened, and dropping the row would leave a hole in a
+ * record whose whole purpose is to be auditable.
+ */
+export interface DraftSelectionRecord {
+  sleeperDraftId: string;
+  seasonId: SeasonId;
+  overallPick: number;
+  round: number;
+  slot: number | null;
+  franchiseId: string | null;
+  playerId: string | null;
+  isKeeper: boolean;
+  source: 'sleeper' | 'manual';
+}
+
 /** Rows written per table, so a caller can confirm what actually landed. */
 export type PersistCounts = Record<string, number>;
 
@@ -379,6 +399,43 @@ export class KeeperRepository {
       ).error,
     );
     return picks.length;
+  }
+
+  /**
+   * Draft selections, keyed the way the schema is: draft plus overall pick. Re-importing a
+   * draft updates in place rather than duplicating.
+   *
+   * Used for historical drafts as well as the live one. A prior season's selections are the
+   * evidence behind every keeper cost this season -- without them, `prior_season_round` is a
+   * conclusion with nothing to check it against.
+   */
+  async saveDraftSelections(
+    selections: readonly DraftSelectionRecord[],
+    batchSize = 500,
+  ): Promise<number> {
+    for (let start = 0; start < selections.length; start += batchSize) {
+      const batch = selections.slice(start, start + batchSize);
+      unwrap(
+        `draft_selections [${start}-${start + batch.length}]`,
+        (
+          await this.client.from('draft_selections').upsert(
+            batch.map((selection) => ({
+              sleeper_draft_id: selection.sleeperDraftId,
+              season_id: selection.seasonId,
+              overall_pick: selection.overallPick,
+              round: selection.round,
+              slot: selection.slot,
+              franchise_id: selection.franchiseId,
+              player_id: selection.playerId,
+              is_keeper: selection.isKeeper,
+              source: selection.source,
+            })),
+            { onConflict: 'sleeper_draft_id,overall_pick' },
+          )
+        ).error,
+      );
+    }
+    return selections.length;
   }
 
   /**
