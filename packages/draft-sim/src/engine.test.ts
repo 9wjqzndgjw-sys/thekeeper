@@ -261,6 +261,52 @@ describe('createDraftSim', () => {
     expect(state.selections[0]!.playerId).toBe('p1');
   });
 
+  it('records why the bot took its player: score, need, market and rank among candidates', () => {
+    const sim = createDraftSim({ pool: pool(), userFranchiseId: USER, reachTemperature: 0 });
+    const state = sim.advance();
+    sim.submitUserPick(state.available[0]!.playerId);
+
+    const botSelection = sim.getState().selections.find((selection) => !selection.byUser)!;
+    // reachTemperature 0 forces the bot to the very top of its own ranking.
+    expect(botSelection.pickReason).toMatchObject({ rank: 1 });
+    expect(botSelection.pickReason!.candidatesConsidered).toBeGreaterThan(0);
+    expect(botSelection.pickReason!.needWeight).toBeGreaterThan(0);
+    expect(botSelection.pickReason!.marketWeight).toBeGreaterThan(0);
+    expect(botSelection.pickReason!.score).toBeCloseTo(
+      botSelection.pickReason!.needWeight *
+        botSelection.pickReason!.marketWeight *
+        // The picked player's own intrinsic value, recovered from the fixture.
+        (200 - Number(String(botSelection.playerId).slice(1))),
+    );
+  });
+
+  it('ranks a user pick that matches the algorithm’s top recommendation as rank 1', () => {
+    const sim = createDraftSim({ pool: pool(), userFranchiseId: USER });
+    sim.advance();
+    const top = sim.getRecommendations(1)[0]!.player.playerId;
+    const state = sim.submitUserPick(top);
+
+    const mine = state.selections.find((selection) => selection.byUser)!;
+    expect(mine.pickReason).toMatchObject({ rank: 1 });
+  });
+
+  it('leaves pickReason null for a keeper: he was never scored by the algorithm', () => {
+    const keeper99 = { ...player(99), fullName: 'Kept Ninety-Nine', position: 'TE' as const };
+    const kept = pool({ keptPlayerIds: new Set(['p99']), keptPlayers: [keeper99] });
+    kept.order[1] = {
+      ...kept.order[1]!,
+      consumedByKeeperRightId: 'k1' as DraftSlotOwnership['consumedByKeeperRightId'],
+      consumedByPlayerId: 'p99' as PlayerId,
+    };
+
+    const sim = createDraftSim({ pool: kept, userFranchiseId: USER });
+    sim.advance();
+    const state = sim.submitUserPick('p1' as PlayerId);
+
+    const keeper = state.selections.find((selection) => selection.isKeeper)!;
+    expect(keeper.pickReason).toBeNull();
+  });
+
   it('reports completion once the order is exhausted', () => {
     const sim = createDraftSim({ pool: pool({}, 2), userFranchiseId: USER });
     let state = sim.advance();

@@ -247,6 +247,13 @@ export function Dashboard({
       )?.displayName ?? String(activeRehearsal.userFranchiseId))
     : 'your team';
 
+  // Every franchise's name, for the draft log to say who took whom -- not just the one being
+  // rehearsed as.
+  const franchiseNames = useMemo(
+    () => new Map(context.snapshot.franchises.map((franchise) => [franchise.id, franchise.displayName])),
+    [context],
+  );
+
   // Awaited so the board a person sees after picking already includes everything the room
   // did in response to it.
   const runPick = (action: (rehearsal: Rehearsal) => Promise<void>) => {
@@ -300,6 +307,7 @@ export function Dashboard({
           <OnTheClockPanel
             view={rehearsalView}
             franchiseName={rehearsalFranchiseName}
+            franchiseNames={franchiseNames}
             busy={busy}
             onPick={(playerId) => runPick((rehearsal) => submitPick(rehearsal, playerId))}
             onUndo={() => runPick(undoPick)}

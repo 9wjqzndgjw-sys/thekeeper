@@ -11,6 +11,25 @@ import {
   DEFAULT_BENCH_ALLOWANCE,
 } from './roster-need.js';
 
+/**
+ * Why the algorithm rated this player the way it did, at the moment he was taken.
+ *
+ * Null for a keeper, which was never scored -- his cost was set years earlier, not by this
+ * board. Also null for a live pick that fell outside the algorithm's ranked candidates
+ * entirely: a user pick the board never considered, or a bot forced to take whoever was left
+ * because nothing scored above zero.
+ */
+export interface DraftPickReason {
+  /** Position in the algorithm's ranked candidate list for this pick, 1 is the top. */
+  rank: number;
+  /** How many candidates the algorithm ranked before this pick was made. */
+  candidatesConsidered: number;
+  /** Intrinsic value tilted by need and market -- the number the algorithm actually compared. */
+  score: number;
+  needWeight: number;
+  marketWeight: number;
+}
+
 /** One selection the rehearsal has made, keeper or live. */
 export interface DraftSimSelection {
   overallPick: number;
@@ -24,6 +43,7 @@ export interface DraftSimSelection {
   isKeeper: boolean;
   /** True for the pick the person rehearsing made themselves. */
   byUser: boolean;
+  pickReason: DraftPickReason | null;
 }
 
 /**
@@ -264,10 +284,16 @@ export function createDraftSim(options: DraftSimOptions): DraftSim {
       position: player.position,
       isKeeper: true,
       byUser: slot.franchiseId === options.userFranchiseId,
+      pickReason: null,
     });
   }
 
-  function takePlayer(index: number, slot: DraftSlotOwnership, byUser: boolean): void {
+  function takePlayer(
+    index: number,
+    slot: DraftSlotOwnership,
+    byUser: boolean,
+    pickReason: DraftPickReason | null,
+  ): void {
     const [player] = available.splice(index, 1);
     if (!player) {
       throw new Error(`No player at index ${index} to draft at overall pick ${slot.overallPick}.`);
@@ -286,7 +312,34 @@ export function createDraftSim(options: DraftSimOptions): DraftSim {
       position: player.position,
       isKeeper: false,
       byUser,
+      pickReason,
     });
+  }
+
+  /**
+   * Where this player sits in the algorithm's own ranking for this pick, if he is in it at
+   * all.
+   *
+   * Shared by bots and the user's own pick so "why" means the same thing regardless of who
+   * made the pick: a rank of one is not "the bot's favourite," it is "the highest score the
+   * algorithm computed," and a human can match or ignore it exactly as a bot can.
+   */
+  function reasonFor(
+    scored: ReturnType<typeof candidatesFor>,
+    player: DraftPoolPlayer,
+  ): DraftPickReason | null {
+    const rank = scored.findIndex((entry) => entry.player.playerId === player.playerId);
+    if (rank === -1) {
+      return null;
+    }
+    const entry = scored[rank]!;
+    return {
+      rank: rank + 1,
+      candidatesConsidered: scored.length,
+      score: entry.score,
+      needWeight: entry.needWeight,
+      marketWeight: entry.marketWeight,
+    };
   }
 
   /**
@@ -418,7 +471,9 @@ export function createDraftSim(options: DraftSimOptions): DraftSim {
         ? window.map((_, index) => (index === 0 ? 1 : 0))
         : window.map((entry) => Math.exp((entry.score - best) / config.reachTemperature));
 
-    takePlayer(window[sampleWeightedIndex(weights, rng)]!.index, slot, false);
+    const chosen = window[sampleWeightedIndex(weights, rng)]!;
+    const chosenPlayer = available[chosen.index]!;
+    takePlayer(chosen.index, slot, false, reasonFor(scored, chosenPlayer));
   }
 
   function runToUser(): void {
@@ -500,7 +555,8 @@ export function createDraftSim(options: DraftSimOptions): DraftSim {
         );
       }
 
-      takePlayer(index, slot!, true);
+      const scored = candidatesFor(slot!.franchiseId);
+      takePlayer(index, slot!, true, reasonFor(scored, available[index]!));
       cursor += 1;
       runToUser();
       return state();
@@ -530,7 +586,9 @@ export function createDraftSim(options: DraftSimOptions): DraftSim {
         if (index === -1) {
           break;
         }
-        takePlayer(index, currentSlot()!, true);
+        const slot = currentSlot()!;
+        const scored = candidatesFor(slot.franchiseId);
+        takePlayer(index, slot, true, reasonFor(scored, available[index]!));
         cursor += 1;
         runToUser();
       }

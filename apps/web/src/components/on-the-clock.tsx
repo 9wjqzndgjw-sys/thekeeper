@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import type { PlayerId } from '@keeper/domain';
+import type { FranchiseId, PlayerId } from '@keeper/domain';
 import type { RehearsalView } from '../rehearsal.js';
 import { PanelShell } from './panel-shell.js';
 
 type Recommendation = RehearsalView['recommendations'][number];
+type Selection = RehearsalView['selections'][number];
 
 /**
  * The pick, when it is yours.
@@ -15,6 +16,7 @@ type Recommendation = RehearsalView['recommendations'][number];
 export function OnTheClockPanel({
   view,
   franchiseName,
+  franchiseNames = new Map(),
   busy,
   onPick,
   onUndo,
@@ -24,6 +26,8 @@ export function OnTheClockPanel({
 }: {
   view: RehearsalView;
   franchiseName: string;
+  /** Every franchise's display name, so the draft log can say who took whom. */
+  franchiseNames?: ReadonlyMap<FranchiseId, string>;
   busy: boolean;
   onPick: (playerId: PlayerId) => void;
   onUndo: () => void;
@@ -48,6 +52,7 @@ export function OnTheClockPanel({
           selections.
         </p>
         <RosterSummary view={view} />
+        <DraftLog view={view} franchiseNames={franchiseNames} />
         {view.canUndo && (
           <button type="button" onClick={onUndo} disabled={busy}>
             Undo last pick
@@ -183,6 +188,7 @@ export function OnTheClockPanel({
       </ul>
 
       <RosterSummary view={view} />
+      <DraftLog view={view} franchiseNames={franchiseNames} />
 
       {view.canUndo && (
         <button type="button" onClick={onUndo} disabled={busy}>
@@ -291,4 +297,71 @@ function RosterSummary({ view }: { view: RehearsalView }) {
       </ol>
     </>
   );
+}
+
+/**
+ * Every pick so far, with the algorithm's own accounting for why it liked that player.
+ *
+ * Collapsed by default and ordered most-recent-first: this is a record to check, not
+ * something that needs to be read on every render. What it shows is exactly what
+ * `candidatesFor` computed at the moment of the pick, not a re-justification after the fact
+ * -- a bot that reached is shown reaching, not quietly rationalised into looking like the top
+ * choice all along.
+ */
+function DraftLog({
+  view,
+  franchiseNames,
+}: {
+  view: RehearsalView;
+  franchiseNames: ReadonlyMap<FranchiseId, string>;
+}) {
+  if (view.selections.length === 0) {
+    return null;
+  }
+
+  const byRecency = [...view.selections].sort((a, b) => b.overallPick - a.overallPick);
+
+  return (
+    <details className="draft-log">
+      <summary>Draft log · why the algorithm took each player</summary>
+      <ol className="draft-log-list">
+        {byRecency.map((selection) => (
+          <li key={selection.overallPick} className="draft-log-entry">
+            <div className="draft-log-head">
+              <span className="pick-label">
+                R{selection.round} · {selection.overallPick}
+              </span>
+              <span className="draft-log-team">
+                {franchiseNames.get(selection.franchiseId) ?? String(selection.franchiseId)}
+              </span>
+              <span>
+                {selection.fullName} ({selection.position})
+              </span>
+            </div>
+            <p className="muted draft-log-reason">{describePickReason(selection)}</p>
+          </li>
+        ))}
+      </ol>
+    </details>
+  );
+}
+
+/** Plain-language account of {@link Selection.pickReason}, the number behind a pick. */
+function describePickReason(selection: Selection): string {
+  if (selection.isKeeper) {
+    return 'Kept before the draft — never scored by the algorithm.';
+  }
+
+  const reason = selection.pickReason;
+  if (reason === null) {
+    return 'Not among the algorithm’s ranked candidates for this pick.';
+  }
+
+  const breakdown =
+    `value × need ${reason.needWeight.toFixed(2)} × market ${reason.marketWeight.toFixed(2)}` +
+    ` = ${reason.score.toFixed(1)}`;
+
+  return reason.rank === 1
+    ? `Algorithm’s top-ranked candidate (${breakdown}).`
+    : `Ranked #${reason.rank} of ${reason.candidatesConsidered} candidates (${breakdown}).`;
 }

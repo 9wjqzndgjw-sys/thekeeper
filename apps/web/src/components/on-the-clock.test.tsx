@@ -2,16 +2,21 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import '../test-setup.js';
+import type { FranchiseId } from '@keeper/domain';
 import { createMockDraftAppContext } from '../app-state.js';
-import { createRehearsal, readRehearsal, type RehearsalView } from '../rehearsal.js';
+import { createRehearsal, readRehearsal, submitPick, type Rehearsal, type RehearsalView } from '../rehearsal.js';
 import { OnTheClockPanel } from './on-the-clock.js';
 
-function buildView(): RehearsalView {
+function startRehearsal(): Rehearsal {
   const rehearsal = createRehearsal({ context: createMockDraftAppContext() });
   if ('error' in rehearsal) {
     throw new Error(`fixture league is not rehearsable: ${rehearsal.error}`);
   }
-  return readRehearsal(rehearsal);
+  return rehearsal;
+}
+
+function buildView(): RehearsalView {
+  return readRehearsal(startRehearsal());
 }
 
 describe('OnTheClockPanel', () => {
@@ -113,5 +118,40 @@ describe('OnTheClockPanel', () => {
     expect((screen.getByLabelText('Search') as HTMLInputElement).value).toBe(
       'a player search that should survive',
     );
+  });
+
+  it('shows a draft log naming who took each player and why the algorithm ranked him', async () => {
+    const rehearsal = startRehearsal();
+    const opening = readRehearsal(rehearsal);
+    await submitPick(rehearsal, opening.recommendations[0]!.player.playerId);
+    const view = readRehearsal(rehearsal);
+
+    // Picking off the algorithm's own top recommendation, so the bot pick(s) that follow are
+    // the ones worth reading a reason for.
+    const botPick = view.selections.find((selection) => !selection.byUser && !selection.isKeeper)!;
+    const franchiseNames = new Map<FranchiseId, string>([
+      [botPick.franchiseId, 'The Rival Franchise'],
+    ]);
+
+    render(
+      <OnTheClockPanel
+        view={view}
+        franchiseName="Test Team"
+        franchiseNames={franchiseNames}
+        busy={false}
+        onPick={() => {}}
+        onUndo={() => {}}
+      />,
+    );
+
+    expect(screen.getByText(/Draft log/)).toBeInTheDocument();
+    expect(screen.getAllByText('The Rival Franchise').length).toBeGreaterThan(0);
+
+    const reasonText = botPick.pickReason
+      ? botPick.pickReason.rank === 1
+        ? /Algorithm’s top-ranked candidate/
+        : /Ranked #\d+ of \d+ candidates/
+      : /Not among the algorithm’s ranked candidates/;
+    expect(screen.getAllByText(reasonText).length).toBeGreaterThan(0);
   });
 });

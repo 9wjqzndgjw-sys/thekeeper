@@ -413,6 +413,45 @@ pre {
   min-height: 2.75rem;
 }
 
+/* Collapsed by default: a record to check, not something read on every render. */
+.draft-log {
+  margin: 0.75rem 0;
+}
+
+.draft-log > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.draft-log-list {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.draft-log-entry {
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+}
+
+.draft-log-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+.draft-log-team {
+  font-weight: 600;
+}
+
+.draft-log-reason {
+  margin: 0.25rem 0 0;
+}
+
 /* --- Panel pop-out ------------------------------------------------------- */
 
 .panel-shell-head {
