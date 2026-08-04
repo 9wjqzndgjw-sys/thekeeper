@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@keeper/domain": "*",
+    "@keeper/draft-sim": "*",
     "@keeper/draft-tracker": "*",
     "@keeper/keeper-optimizer": "*",
     "@keeper/mock-draft": "*",
