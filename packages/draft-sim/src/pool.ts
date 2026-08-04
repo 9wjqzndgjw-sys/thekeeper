@@ -5,6 +5,7 @@ import {
   type KeeperRight,
   type KeeperRightId,
   type LeagueStateSnapshot,
+  type LineupSettings,
   type Player,
   type PlayerId,
   type Position,
@@ -88,6 +89,8 @@ export interface DraftPool {
   postures: FranchisePickPosture[];
   /** Recomputed against the post-keeper pool, since that is the pool being drafted from. */
   replacementLevels: ReplacementLevels;
+  /** Carried so anything modelling a roster reads the league's own slots, not a guess. */
+  lineup: LineupSettings;
   readiness: DraftPoolReadiness;
 }
 
@@ -204,6 +207,7 @@ export function buildDraftPool(input: BuildDraftPoolInput): DraftPool {
     order,
     postures,
     replacementLevels,
+    lineup: snapshot.league.lineup,
     readiness: { ok: blockers.length === 0, blockers, warnings },
   };
 }

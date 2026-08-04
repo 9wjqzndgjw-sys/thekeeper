@@ -35,6 +35,7 @@ function pool(overrides: Partial<DraftPool> = {}, rounds = 4): DraftPool {
     order,
     postures: [],
     replacementLevels: {},
+    lineup: { qb: 1, rb: 1, wr: 1, te: 0, flex: 0, def: 0, bench: 4, ir: 0 },
     readiness: { ok: true, blockers: [], warnings: [] },
     ...overrides,
   };
@@ -197,6 +198,65 @@ describe('createDraftSim', () => {
     expect(state.selections.map((selection) => String(selection.playerId))).not.toContain('p2');
     expect(state.available.some((candidate) => String(candidate.playerId) === 'p2')).toBe(true);
     // The pick before the undone one survives.
+    expect(state.selections[0]!.playerId).toBe('p1');
+  });
+
+  it('never drafts past a position cap, even when that position tops the board', () => {
+    // The exact shape that produced two defences on every roster: a position priced above
+    // everything else remaining, so a window taken off the top of the board holds nothing
+    // but players the roster has no room for.
+    const defences = Array.from({ length: 20 }, (_, index) => ({
+      ...player(index + 1),
+      position: 'DEF' as const,
+      intrinsicValue: 100 - index,
+    }));
+    const skill = Array.from({ length: 20 }, (_, index) => ({
+      ...player(index + 100),
+      position: 'RB' as const,
+      intrinsicValue: 1,
+    }));
+
+    const sim = createDraftSim({
+      pool: pool({
+        players: [...defences, ...skill],
+        lineup: { qb: 0, rb: 2, wr: 0, te: 0, flex: 0, def: 1, bench: 4, ir: 0 },
+      }),
+      userFranchiseId: USER,
+      seed: 5,
+    });
+
+    let state = sim.advance();
+    while (state.status === 'awaiting_user') {
+      state = sim.submitUserPick(sim.getRecommendations(1)[0]!.player.playerId);
+    }
+
+    for (const franchiseId of [USER, RIVAL]) {
+      const taken = state.selections.filter((selection) => selection.franchiseId === franchiseId);
+      expect(taken.filter((selection) => selection.position === 'DEF').length).toBeLessThanOrEqual(
+        1,
+      );
+    }
+  });
+
+  it('recommends for whoever is on the clock, never a capped position', () => {
+    const sim = createDraftSim({ pool: pool(), userFranchiseId: USER });
+    sim.advance();
+
+    const recommendations = sim.getRecommendations(3);
+    expect(recommendations).toHaveLength(3);
+    expect(recommendations[0]!.score).toBeGreaterThanOrEqual(recommendations[1]!.score);
+    expect(recommendations.every((entry) => entry.needWeight > 0)).toBe(true);
+  });
+
+  it('ignores rosters entirely when roster need is switched off', () => {
+    const sim = createDraftSim({
+      pool: pool(),
+      userFranchiseId: RIVAL,
+      useRosterNeed: false,
+      reachTemperature: 0,
+    });
+    const state = sim.advance();
+
     expect(state.selections[0]!.playerId).toBe('p1');
   });
 

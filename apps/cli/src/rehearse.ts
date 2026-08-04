@@ -68,18 +68,25 @@ console.log(`Rehearsing as ${franchise.displayName}, seed ${seed}\n`);
 let state = sim.advance();
 while (state.status === 'awaiting_user') {
   const slot = state.onTheClock!;
-  const board = state.available.slice(0, 5);
-  const taken = board[0]!;
+  // Picked the way the engine would advise, so the rehearsal shows a roster a manager might
+  // actually build. Taking the raw top of the board instead left this team with five
+  // receivers and no defence -- best-available's blind spot, not the draft's.
+  const recommended = sim.getRecommendations(4);
+  const taken = recommended[0]!.player;
+  const bestByValue = state.available[0]!;
 
   console.log(
     `R${String(slot.round).padStart(2)} pick ${String(slot.overallPick).padStart(3)}  ` +
-      `-> ${taken.fullName} (${taken.position}, IV ${taken.intrinsicValue.toFixed(1)})`,
+      `-> ${taken.fullName} (${taken.position}, IV ${taken.intrinsicValue.toFixed(1)})` +
+      (taken.playerId === bestByValue.playerId
+        ? ''
+        : `   [board had ${bestByValue.fullName} ${bestByValue.position}]`),
   );
   console.log(
-    `${' '.repeat(20)}also there: ` +
-      board
+    `${' '.repeat(20)}also fits: ` +
+      recommended
         .slice(1)
-        .map((candidate) => `${candidate.fullName} ${candidate.position}`)
+        .map((entry) => `${entry.player.fullName} ${entry.player.position}`)
         .join(', '),
   );
 
@@ -107,3 +114,22 @@ console.log(
     .join('   ')}`,
 );
 console.log(`\nDraft made ${state.selections.length} selections in total.`);
+
+// Every roster in the room, so a position nobody can start is visible rather than assumed.
+console.log('\nEvery roster, by position');
+const shape = new Map<string, Map<string, number>>();
+for (const selection of state.selections) {
+  const team = loaded.snapshot.franchises.find(
+    (candidate) => candidate.id === selection.franchiseId,
+  )!.displayName;
+  const positions = shape.get(team) ?? new Map<string, number>();
+  positions.set(selection.position, (positions.get(selection.position) ?? 0) + 1);
+  shape.set(team, positions);
+}
+for (const posture of pool.postures) {
+  const positions = shape.get(posture.displayName) ?? new Map<string, number>();
+  const line = ['QB', 'RB', 'WR', 'TE', 'DEF']
+    .map((position) => `${position} ${positions.get(position) ?? 0}`)
+    .join('  ');
+  console.log(`  ${posture.displayName.padEnd(14)} ${line}`);
+}
