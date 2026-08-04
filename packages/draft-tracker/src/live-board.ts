@@ -28,6 +28,14 @@ export interface LiveDraftBoardRow {
   intrinsicValue: number;
   /** Surplus if taken at `userNextOverallPick`; null when no pick was supplied. */
   valueAtUserNextPick: number | null;
+  /**
+   * Where the market takes him, from the projection source.
+   *
+   * Sits beside intrinsic value rather than replacing it, because they disagree usefully:
+   * the gap between what a player is worth here and where the room takes him is the whole
+   * reason a board is worth reading before a pick.
+   */
+  averageDraftPosition: number | null;
 }
 
 export interface LiveDraftBoard {
@@ -49,6 +57,8 @@ export interface ComputeLiveDraftBoardInput {
   pickValueCurve: PickValueCurve;
   lineup: LineupSettings;
   teamCount: number;
+  /** Market draft position by player id. Absent players simply have none. */
+  averageDraftPositionByPlayerId?: ReadonlyMap<PlayerId, number | null>;
   userNextOverallPick?: number;
   /** A new tier starts when the drop to the next player exceeds this share of the current value. */
   tierGapRatio?: number;
@@ -138,6 +148,7 @@ export function computeLiveDraftBoard(input: ComputeLiveDraftBoardInput): LiveDr
           player,
           projectedPoints,
           intrinsicValue: intrinsic.intrinsicValue,
+          averageDraftPosition: input.averageDraftPositionByPlayerId?.get(player.id) ?? null,
           valueAtUserNextPick:
             input.userNextOverallPick === undefined
               ? null
@@ -175,6 +186,7 @@ function assignTiers(
     player: Player;
     projectedPoints: number;
     intrinsicValue: number;
+    averageDraftPosition: number | null;
     valueAtUserNextPick: number | null;
   }[],
   tierGapRatio: number,
@@ -201,6 +213,7 @@ function assignTiers(
       position: entry.player.position,
       projectedPoints: entry.projectedPoints,
       intrinsicValue: entry.intrinsicValue,
+      averageDraftPosition: entry.averageDraftPosition,
       valueAtUserNextPick: entry.valueAtUserNextPick,
     };
   });

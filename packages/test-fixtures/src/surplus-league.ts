@@ -113,6 +113,7 @@ export const surplusPlayerSeasons: PlayerSeason[] = [...specs, ...depthSpecs].ma
   injuryStatus: null,
   projectedPoints: spec.projectedPoints,
   actualPoints: null,
+  averageDraftPosition: null,
 }));
 
 export const surplusKeeperRights: KeeperRight[] = specs.map((spec) => ({

@@ -71,6 +71,7 @@ function snapshot(overrides: Partial<LeagueStateSnapshot> = {}): LeagueStateSnap
       injuryStatus: null,
       projectedPoints: 200 - index * 10,
       actualPoints: null,
+      averageDraftPosition: null,
     })),
     userFranchiseId: 'f1' as FranchiseId,
     evaluatedAt: '2026-08-01T00:00:00.000Z',

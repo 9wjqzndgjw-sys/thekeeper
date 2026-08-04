@@ -139,6 +139,7 @@ export const playerSeasons: PlayerSeason[] = [
     injuryStatus: null,
     projectedPoints: 320,
     actualPoints: null,
+    averageDraftPosition: null,
   },
   {
     playerId: 'player-b' as PlayerId,
@@ -149,6 +150,7 @@ export const playerSeasons: PlayerSeason[] = [
     injuryStatus: null,
     projectedPoints: 210,
     actualPoints: null,
+    averageDraftPosition: null,
   },
   {
     playerId: 'player-c' as PlayerId,
@@ -159,6 +161,7 @@ export const playerSeasons: PlayerSeason[] = [
     injuryStatus: null,
     projectedPoints: 150,
     actualPoints: null,
+    averageDraftPosition: null,
   },
 ];
 

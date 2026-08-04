@@ -257,6 +257,7 @@ function projection(playerId: string, projectedPoints: number): PlayerSeason {
     injuryStatus: null,
     projectedPoints,
     actualPoints: null,
+    averageDraftPosition: null,
   };
 }
 

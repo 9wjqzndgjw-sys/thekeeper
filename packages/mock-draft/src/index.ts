@@ -269,6 +269,7 @@ function createPlayerSeasons(players: readonly Player[]): PlayerSeason[] {
     injuryStatus: null,
     projectedPoints: projectPlayer(player),
     actualPoints: null,
+    averageDraftPosition: null,
   }));
 }
 

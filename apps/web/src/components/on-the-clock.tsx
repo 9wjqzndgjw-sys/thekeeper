@@ -70,6 +70,7 @@ export function OnTheClockPanel({
             <th scope="col">Pos</th>
             <th scope="col">Proj</th>
             <th scope="col">Value</th>
+            <th scope="col">ADP</th>
             <th scope="col">Need</th>
             <th scope="col" aria-label="Draft" />
           </tr>
@@ -81,6 +82,13 @@ export function OnTheClockPanel({
               <td>{entry.player.position}</td>
               <td className="numeric">{entry.player.projectedPoints.toFixed(1)}</td>
               <td className="numeric">{entry.player.intrinsicValue.toFixed(1)}</td>
+              {/* Where the room takes him, against where this league values him. A pick
+                  far below its ADP is a reach; far above it is a player falling. */}
+              <td className="numeric">
+                {entry.player.averageDraftPosition === null
+                  ? '—'
+                  : entry.player.averageDraftPosition.toFixed(1)}
+              </td>
               {/* Shown because a recommendation that departs from the board should say why. */}
               <td className="numeric">{entry.needWeight.toFixed(2)}</td>
               <td>
@@ -112,7 +120,11 @@ export function OnTheClockPanel({
         {searchResults.map((player) => (
           <li key={String(player.playerId)}>
             <button type="button" disabled={busy} onClick={() => onPick(player.playerId)}>
-              Draft {player.fullName} ({player.position})
+              Draft {player.fullName} ({player.position}
+              {player.averageDraftPosition === null
+                ? ''
+                : `, ADP ${player.averageDraftPosition.toFixed(1)}`}
+              )
             </button>
           </li>
         ))}

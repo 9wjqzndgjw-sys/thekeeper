@@ -211,6 +211,7 @@ function deepPoolSnapshot(): LeagueStateSnapshot {
       injuryStatus: null,
       projectedPoints: Math.max(1, basePoints[player.position] - (index % 120) * 2),
       actualPoints: null,
+      averageDraftPosition: null,
     })),
   };
 }

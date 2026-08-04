@@ -1,4 +1,11 @@
-import type { FranchiseId, KeeperRight, LineupSettings, Player, SeasonId } from '@keeper/domain';
+import type {
+  FranchiseId,
+  KeeperRight,
+  LineupSettings,
+  Player,
+  PlayerId,
+  SeasonId,
+} from '@keeper/domain';
 import {
   computeLiveDraftBoard,
   type LiveDraftBoard,
@@ -30,6 +37,8 @@ export interface BuildBoardsInput {
   pickValueCurveAssumingExpected: PickValueCurve;
   lineup: LineupSettings;
   teamCount: number;
+  /** Market draft position by player id, shown beside this league's own valuation. */
+  averageDraftPositionByPlayerId?: ReadonlyMap<PlayerId, number | null>;
   /**
    * The keepers managers have actually declared. Fact, as far as it goes -- but a manager
    * can still change a declaration before the deadline, and some have declared nothing.
@@ -71,6 +80,7 @@ export function buildBoards(input: BuildBoardsInput): BoardViewModel[] {
     projectionSource: input.projectionSource,
     lineup: input.lineup,
     teamCount: input.teamCount,
+    averageDraftPositionByPlayerId: input.averageDraftPositionByPlayerId,
     userNextOverallPick: input.userNextOverallPick,
     limit: input.limit,
   };

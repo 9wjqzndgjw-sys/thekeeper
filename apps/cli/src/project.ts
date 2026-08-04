@@ -1,7 +1,11 @@
 import { readFileSync } from 'node:fs';
 import type { SeasonId } from '@keeper/domain';
 import { createServiceClientFromEnv, KeeperRepository } from '@keeper/persistence';
-import { loadProjections, matchProjectionsToCatalog } from '@keeper/projections';
+import {
+  loadProjections,
+  matchProjectionsToCatalog,
+  normalizeProjectionName,
+} from '@keeper/projections';
 import type { SleeperScoringSettings } from '@keeper/valuation';
 import { LEAGUE_SCORING, resolveSleeperLeagueId } from './league-config.js';
 import { canReplaceProjections, MINIMUM_PROJECTION_MATCH_RATE } from './replacement-authority.js';
@@ -58,6 +62,17 @@ console.log(
 const projectedById = new Map(
   loaded.playerSeasons.map((season) => [String(season.playerId), season.projectedPoints ?? 0]),
 );
+// The catalog match joins on position plus normalized name, so ADP is carried across on
+// that same key rather than looked up again on the far side. Building it any other way
+// risks the two disagreeing about which player is which, which is precisely what the
+// matcher exists to prevent.
+const adpByProjectionKey = new Map<string, number>();
+for (const player of loaded.players) {
+  const adp = loaded.averageDraftPositionByPlayerId.get(player.id);
+  if (adp !== undefined) {
+    adpByProjectionKey.set(`${player.position}:${normalizeProjectionName(player.fullName)}`, adp);
+  }
+}
 
 const catalog = await repository.readAllPlayers();
 if (catalog.length === 0) {
@@ -78,6 +93,20 @@ const matched = matchProjectionsToCatalog({
 const catalogIdBySleeperId = new Map(
   catalog.filter((player) => player.sleeperPlayerId).map((p) => [p.sleeperPlayerId!, p.id]),
 );
+
+const adpBySleeperId = new Map<string, number>();
+for (const player of catalog) {
+  if (!player.sleeperPlayerId) {
+    continue;
+  }
+  const adp = adpByProjectionKey.get(
+    `${player.position}:${normalizeProjectionName(player.fullName)}`,
+  );
+  if (adp !== undefined) {
+    adpBySleeperId.set(player.sleeperPlayerId, adp);
+  }
+}
+console.log(`ADP matched:        ${adpBySleeperId.size}`);
 
 console.log(`Projections loaded:  ${loaded.players.length}`);
 console.log(`Matched to catalog:  ${matched.pointsBySleeperId.size}`);
@@ -128,6 +157,9 @@ const { written, removed } = await repository.replacePlayerSeasons(
             playerId,
             projectedPoints,
             projectionSource: 'fantasy-pros-rescored',
+            // Absent rather than zero where the source ranked nobody: defences carry no
+            // ADP at all, and a zero would sort them to the front of any ADP board.
+            averageDraftPosition: adpBySleeperId.get(sleeperId) ?? null,
           },
         ];
   }),

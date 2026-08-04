@@ -20,6 +20,7 @@ const playerSeasons: PlayerSeason[] = [
     injuryStatus: null,
     projectedPoints: 320,
     actualPoints: null,
+    averageDraftPosition: null,
   },
 ];
 

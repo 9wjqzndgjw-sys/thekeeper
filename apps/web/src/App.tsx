@@ -192,6 +192,19 @@ export function Dashboard({
     [context, franchiseId, trackerState.selections],
   );
 
+  // Built from the snapshot rather than looked up per row, so a board of five hundred
+  // players does not walk the season list five hundred times.
+  const adpByPlayerId = useMemo(
+    () =>
+      new Map(
+        context.snapshot.playerSeasons.map((season) => [
+          season.playerId,
+          season.averageDraftPosition ?? null,
+        ]),
+      ),
+    [context],
+  );
+
   const boards = useMemo(
     () =>
       buildBoards({
@@ -204,13 +217,14 @@ export function Dashboard({
         pickValueCurveAssumingExpected: context.pickValueCurveAssumingExpected,
         lineup: context.snapshot.league.lineup,
         teamCount: context.snapshot.league.rules.teamCount,
+        averageDraftPositionByPlayerId: adpByPlayerId,
         declaredKeeperRights: context.declaredKeepers,
         expectedKeeperRights: context.expectedKeepers,
         selections: trackerState.selections,
         userNextOverallPick: horizon.userNextOverallPick ?? undefined,
         limit: 60,
       }),
-    [context, franchiseId, trackerState.selections, horizon.userNextOverallPick],
+    [context, franchiseId, trackerState.selections, horizon.userNextOverallPick, adpByPlayerId],
   );
 
   const syncStatus = useMemo(

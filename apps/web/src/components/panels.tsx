@@ -170,6 +170,9 @@ export function BoardPanel({ board }: { board: BoardViewModel }) {
             <th>Pos</th>
             <th>Proj</th>
             <th>IV</th>
+            {/* Beside the league's own valuation rather than instead of it. Where the two
+                disagree is the part of a board worth reading before a pick. */}
+            <th>ADP</th>
             <th>At your pick</th>
           </tr>
         </thead>
@@ -182,6 +185,11 @@ export function BoardPanel({ board }: { board: BoardViewModel }) {
               <td>{row.position}</td>
               <td>{formatNumber(row.projectedPoints)}</td>
               <td>{formatNumber(row.intrinsicValue)}</td>
+              {/* An em dash where the source ranked nobody -- a defence has no ADP, and a
+                  zero there would read as the first pick of the draft. */}
+              <td>
+                {row.averageDraftPosition === null ? '—' : formatNumber(row.averageDraftPosition)}
+              </td>
               <td>
                 {row.valueAtUserNextPick === null ? '—' : formatNumber(row.valueAtUserNextPick)}
               </td>

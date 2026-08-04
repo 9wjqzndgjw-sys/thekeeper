@@ -49,6 +49,8 @@ export interface PlayerSeasonRecord {
   playerId: string;
   projectedPoints: number;
   projectionSource: string;
+  /** Market draft position from the source, or null where it reported none. */
+  averageDraftPosition?: number | null;
 }
 
 export interface FranchiseSeasonRecord {
@@ -240,6 +242,7 @@ export class KeeperRepository {
               player_id: record.playerId,
               projected_points: record.projectedPoints,
               projection_source: record.projectionSource,
+              adp: record.averageDraftPosition ?? null,
             })),
             { onConflict: 'season_id,player_id' },
           )
@@ -256,7 +259,7 @@ export class KeeperRepository {
     for (let from = 0; ; from += pageSize) {
       const { data, error } = await this.client
         .from('player_seasons')
-        .select('season_id, player_id, projected_points, projection_source')
+        .select('season_id, player_id, projected_points, projection_source, adp')
         .eq('season_id', seasonId)
         .order('player_id')
         .range(from, from + pageSize - 1);
@@ -269,6 +272,9 @@ export class KeeperRepository {
           playerId: String(row.player_id),
           projectedPoints: Number(row.projected_points ?? 0),
           projectionSource: String(row.projection_source ?? ''),
+          // Absent stays absent. Coercing a missing ADP to zero would put every unranked
+          // player at the top of a board sorted by it.
+          averageDraftPosition: row.adp === null || row.adp === undefined ? null : Number(row.adp),
         })),
       );
       if (page.length < pageSize) {

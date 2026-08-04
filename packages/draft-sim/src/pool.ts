@@ -26,6 +26,8 @@ export interface DraftPoolPlayer {
   position: Position;
   projectedPoints: number;
   intrinsicValue: number;
+  /** Where the market takes him, or null where the source ranked nobody. */
+  averageDraftPosition: number | null;
 }
 
 /**
@@ -117,6 +119,12 @@ export function buildDraftPool(input: BuildDraftPoolInput): DraftPool {
   const projectedByPlayerId = new Map(
     snapshot.playerSeasons.map((season) => [String(season.playerId), season.projectedPoints ?? 0]),
   );
+  const adpByPlayerId = new Map(
+    snapshot.playerSeasons.map((season) => [
+      String(season.playerId),
+      season.averageDraftPosition ?? null,
+    ]),
+  );
 
   const declaredRights = snapshot.keeperRights.filter((right) =>
     input.declaredPlayerIds.has(String(right.playerId)),
@@ -167,6 +175,7 @@ export function buildDraftPool(input: BuildDraftPoolInput): DraftPool {
           projectedPoints,
           replacementLevel: replacementLevels[player.position] ?? 0,
         }).intrinsicValue,
+        averageDraftPosition: adpByPlayerId.get(String(player.id)) ?? null,
       },
     ];
   });

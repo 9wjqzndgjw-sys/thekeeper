@@ -85,6 +85,9 @@ export async function loadLeagueSnapshot(
   const projectedByPlayerId = new Map(
     playerSeasonRows.map((row) => [row.playerId, row.projectedPoints]),
   );
+  const adpByPlayerId = new Map(
+    playerSeasonRows.map((row) => [row.playerId, row.averageDraftPosition ?? null]),
+  );
   const nameByPlayerId = new Map(catalog.map((player) => [player.id, player.fullName]));
   const players: Player[] = catalog
     .filter((player) => projectedByPlayerId.has(player.id))
@@ -104,6 +107,7 @@ export async function loadLeagueSnapshot(
     injuryStatus: null,
     projectedPoints: projectedByPlayerId.get(player.id) ?? null,
     actualPoints: null,
+    averageDraftPosition: adpByPlayerId.get(player.id) ?? null,
   }));
 
   const userFranchiseId = input.userFranchiseId ?? (franchises[0]?.id as FranchiseId | undefined);

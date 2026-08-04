@@ -35,6 +35,7 @@ const playerSeasons: PlayerSeason[] = players.map((player, index) => ({
   injuryStatus: null,
   projectedPoints: 300 - index * 50,
   actualPoints: null,
+  averageDraftPosition: null,
 }));
 
 const baseInput = {

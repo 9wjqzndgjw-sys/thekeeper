@@ -486,6 +486,7 @@ const knownScenarioPlayerSeasons: PlayerSeason[] = [
     injuryStatus: null,
     projectedPoints: 320,
     actualPoints: null,
+    averageDraftPosition: null,
   },
   {
     playerId: 'player-trey-mcbride' as PlayerId,
@@ -496,6 +497,7 @@ const knownScenarioPlayerSeasons: PlayerSeason[] = [
     injuryStatus: null,
     projectedPoints: 210,
     actualPoints: null,
+    averageDraftPosition: null,
   },
   {
     playerId: 'player-caleb-williams' as PlayerId,
@@ -506,6 +508,7 @@ const knownScenarioPlayerSeasons: PlayerSeason[] = [
     injuryStatus: null,
     projectedPoints: 250,
     actualPoints: null,
+    averageDraftPosition: null,
   },
 ];
 

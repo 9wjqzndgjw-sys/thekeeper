@@ -80,6 +80,25 @@ const RECEIVING_SEQUENCE = ['TGT', 'REC', 'YDS', 'TD'] as const;
 const SUPPORTED_POSITIONS = new Set<Position>(['QB', 'RB', 'WR', 'TE', 'DEF']);
 
 /**
+ * Highest value treated as a measured draft position rather than a placeholder.
+ *
+ * The export fills unranked players with 999, and does so 294 times in a single season --
+ * a value that many players share is a marker, not an average. A handful of larger numbers
+ * appear above it, all far beyond any draft that has ever been held. Stored as they stand
+ * they read on a board as a real draft position: 999 sorts and displays exactly like a
+ * player the market has an opinion about.
+ *
+ * Anything at or above this is reported as absent, which is what it means. A non-positive
+ * value goes the same way, for the same reason.
+ */
+const UNRANKED_ADP = 999;
+
+function readAverageDraftPosition(cell: string | undefined): number | null {
+  const adp = parseNumericCell(cell);
+  return adp === null || adp <= 0 || adp >= UNRANKED_ADP ? null : adp;
+}
+
+/**
  * Loads exported projections and rescores every player under the league's own rules.
  *
  * The source's own FPTS column is deliberately ignored. It is computed for whatever
@@ -130,6 +149,7 @@ export function loadProjections(input: LoadProjectionsInput): LoadedProjections 
       injuryStatus: null,
       projectedPoints: scored.points,
       actualPoints: null,
+      averageDraftPosition: adp,
     });
     if (adp !== null) {
       averageDraftPositionByPlayerId.set(playerId as PlayerId, adp);
@@ -161,7 +181,7 @@ export function loadProjections(input: LoadProjectionsInput): LoadedProjections 
       continue;
     }
 
-    const adp = parseNumericCell(row[skillColumns.adp]);
+    const adp = readAverageDraftPosition(row[skillColumns.adp]);
     record(
       name,
       position,
@@ -176,7 +196,7 @@ export function loadProjections(input: LoadProjectionsInput): LoadedProjections 
         receivingYards: parseNumericCell(row[skillColumns.receivingYards]),
         receivingTouchdowns: parseNumericCell(row[skillColumns.receivingTouchdowns]),
       },
-      adp > 0 ? adp : null,
+      adp,
     );
   }
 

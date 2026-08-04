@@ -14,6 +14,7 @@ function player(index: number): DraftPoolPlayer {
     position: index % 2 === 0 ? 'RB' : 'WR',
     projectedPoints: 300 - index,
     intrinsicValue: 200 - index,
+    averageDraftPosition: index,
   };
 }
 

@@ -87,6 +87,25 @@ describe('loadProjections', () => {
     );
   });
 
+  it('treats the unranked placeholder as no ADP at all', () => {
+    // The export fills unranked players with 999, and does so hundreds of times a season.
+    // Stored as a number it reads on a board exactly like a real draft position.
+    const csv = [
+      SKILL_HEADER,
+      '"1","Ranked Player","RB","DET","6","RB1","12.4","200","17","11.8","1","0","0","0","0","0","180","900","6","0","0","0","0","-","-","-","-","-"',
+      '"2","Unranked Player","RB","DET","6","RB2","999.0","100","17","5.9","1","0","0","0","0","0","90","450","3","0","0","0","0","-","-","-","-","-"',
+    ].join('\n');
+
+    const loaded = loadProjections({ skillPositionCsv: csv, scoring: leagueScoring, seasonId });
+
+    expect(loaded.players).toHaveLength(2);
+    expect([...loaded.averageDraftPositionByPlayerId.values()]).toEqual([12.4]);
+    const unranked = loaded.playerSeasons.find((season) =>
+      String(season.playerId).includes('unranked'),
+    );
+    expect(unranked?.averageDraftPosition).toBeNull();
+  });
+
   it('captures ADP for the pick-value curve', () => {
     const csv = [
       SKILL_HEADER,
