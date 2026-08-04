@@ -387,6 +387,35 @@ describe('optimizeKeeperCombinations', () => {
     expect(jaydenOnly?.modeScores.win_now).not.toBe(jaydenOnly?.modeScores.safest);
   });
 
+  it('names the player in its explanation rather than leaking the raw keeper right id', () => {
+    // The explanation is built before any name is in scope, so it originally read
+    // "keeper-jayden-daniels-r5: nominal round 5 -> ...". Real leagues give that id a much
+    // longer, Sleeper-derived form (`keeper:season:<id>:franchise:<id>:<playerId>`), which
+    // is both unreadable and, in a fixed-width pre block, wide enough to overflow the panel.
+    const result = optimizeKeeperCombinations({
+      keeperRights: knownScenarioKeeperRights,
+      pickInventory: knownUserScenarioPickInventory,
+      players: knownScenarioPlayers,
+      franchiseId: userFranchiseId,
+      seasonId,
+      evaluatedAt: '2026-07-31T00:00:00.000Z',
+      projectionSource: createProjectionSourceFromPlayerSeasons(knownScenarioPlayerSeasons),
+      replacementLevels: knownScenarioReplacementLevels,
+      pickValueCurve: knownScenarioPickValueCurve,
+      maxKeepers: 3,
+      rosterFitByPlayerId: new Map([[knownScenarioPlayers[0]!.id, 10]]),
+    });
+
+    const jaydenOnly = result.combinations.find(
+      (combination) =>
+        combination.selectedKeeperRightIds.length === 1 &&
+        combination.selectedKeeperRightIds[0] === 'keeper-jayden-daniels-r5',
+    );
+
+    expect(jaydenOnly?.explanation).toContain('Jayden Daniels: nominal round 5 ->');
+    expect(jaydenOnly?.explanation).not.toContain('keeper-jayden-daniels-r5');
+  });
+
   it('throws clearly when a selected keeper cannot be matched to player metadata', () => {
     expect(() =>
       optimizeKeeperCombinations({

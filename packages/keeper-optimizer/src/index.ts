@@ -543,6 +543,10 @@ function buildValuedCombinationExplanation(
     return 'No keepers selected; retained IV, pick cost, KSV, and TCV are all zero.';
   }
 
+  const nameByKeeperRightId = new Map(
+    playerValuations.map((player) => [player.keeperRightId, player.fullName]),
+  );
+
   const valueLines = playerValuations.map(
     (player) =>
       `${player.fullName}: IV ${formatNumber(player.intrinsicValue)}, pick cost ${formatNumber(
@@ -553,12 +557,30 @@ function buildValuedCombinationExplanation(
   );
 
   return [
-    resolution.explanation,
+    humanizeKeeperRightIds(resolution.explanation, nameByKeeperRightId),
     ...valueLines,
     `Expected score ${formatNumber(modeScores.expected)}; safest ${formatNumber(
       modeScores.safest,
     )}; win-now ${formatNumber(modeScores.win_now)}; future ${formatNumber(modeScores.future)}.`,
   ].join('\n');
+}
+
+/**
+ * The resolution explanation is built before any player is in scope (see
+ * `buildResolutionExplanation`), so its lines lead with the raw keeper right id -- an opaque,
+ * colon-delimited internal key, not something a manager reading a recommendation should ever
+ * see. Every id in scope here has just been valued, so its name is known; swapped in once,
+ * here, rather than threading `Player[]` down into resolution just to format a string.
+ */
+function humanizeKeeperRightIds(
+  text: string,
+  nameByKeeperRightId: ReadonlyMap<KeeperRightId, string>,
+): string {
+  let humanized = text;
+  for (const [id, name] of nameByKeeperRightId) {
+    humanized = humanized.split(id).join(name);
+  }
+  return humanized;
 }
 
 function getRequiredBreakdownValue(valuation: ValuationResult, key: string): number {
