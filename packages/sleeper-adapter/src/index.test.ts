@@ -109,6 +109,35 @@ describe('SleeperAdapter fetching and validation', () => {
     );
   });
 
+  it.each([
+    ['"0"', '0'],
+    ['an empty string', ''],
+  ])('reads %s as the end of the chain rather than a league to fetch', async (_label, sentinel) => {
+    // The founding season carries "0" instead of null. Following it requests league "0",
+    // which 404s and takes the whole import down at the oldest real season.
+    const adapter = createSleeperAdapter({
+      fetch: createMockFetch([
+        jsonResponse({
+          total_rosters: 12,
+          status: 'complete',
+          settings: {},
+          scoring_settings: {},
+          roster_positions: ['QB'],
+          previous_league_id: sentinel,
+          name: 'Founding Season',
+          league_id: 'league-oldest',
+          draft_id: 'draft-1',
+          avatar: null,
+          season: '2021',
+        }),
+      ]),
+    });
+
+    const result = await adapter.getLeague('league-oldest');
+
+    expect(result.data.previousSleeperLeagueId).toBeNull();
+  });
+
   it('throws a validation error when a required field is missing', async () => {
     const adapter = createSleeperAdapter({
       fetch: createMockFetch([

@@ -741,12 +741,26 @@ function normalizeUser(user: SleeperUser): NormalizedSleeperUser {
   };
 }
 
+/**
+ * The oldest season in a chain carries `"0"` rather than null, so the absence of a previous
+ * league arrives as a league id that looks real and is not.
+ *
+ * Left alone it is followed like any other pointer, and the request for league "0" returns
+ * 404 -- which reads as a network failure rather than the end of the chain, and takes the
+ * whole import down at the first league that has actually existed since the beginning. An
+ * empty string gets the same treatment for the same reason.
+ */
+function normalizePreviousLeagueId(value: string | null | undefined): string | null {
+  const previous = value?.trim() ?? '';
+  return previous === '' || previous === '0' ? null : previous;
+}
+
 function normalizeLeague(league: SleeperLeague): NormalizedSleeperLeague {
   return {
     sleeperLeagueId: league.league_id,
     name: league.name,
     season: league.season,
-    previousSleeperLeagueId: league.previous_league_id ?? null,
+    previousSleeperLeagueId: normalizePreviousLeagueId(league.previous_league_id),
     draftId: league.draft_id ?? null,
     status: league.status,
     totalRosters: league.total_rosters,
