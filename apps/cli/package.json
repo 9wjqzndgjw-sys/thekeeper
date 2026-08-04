@@ -16,7 +16,8 @@
     "catalog": "tsx src/catalog.ts",
     "project": "tsx src/project.ts",
     "keeper-values": "tsx src/keeper-values.ts",
-    "pool": "tsx src/pool.ts"
+    "pool": "tsx src/pool.ts",
+    "rehearse": "tsx src/rehearse.ts"
   },
   "dependencies": {
     "@keeper/domain": "*",

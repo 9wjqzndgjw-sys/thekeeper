@@ -41,6 +41,8 @@ export interface DraftSlotOwnership {
   franchiseId: FranchiseId;
   /** The keeper this pick is spent on, or null when it is a live selection. */
   consumedByKeeperRightId: KeeperRightId | null;
+  /** The player that keeper is, so the pick can be shown without a second lookup. */
+  consumedByPlayerId: PlayerId | null;
 }
 
 /**
@@ -72,6 +74,15 @@ export interface DraftPool {
   /** Draftable players, keepers already removed, best first. */
   players: DraftPoolPlayer[];
   keptPlayerIds: Set<string>;
+  /**
+   * The kept players themselves, priced the same way.
+   *
+   * Carried rather than left to the caller because a keeper still occupies a pick and has
+   * to be shown on the board. Looking him up in `players` cannot work -- that is the pool
+   * he has been removed from -- and falling back to an id and a guessed position puts
+   * fiction on the very board this exists to keep honest.
+   */
+  keptPlayers: DraftPoolPlayer[];
   /** Every overall pick in order, keeper-consumed ones included and marked. */
   order: DraftSlotOwnership[];
   postures: FranchisePickPosture[];
@@ -137,32 +148,36 @@ export function buildDraftPool(input: BuildDraftPoolInput): DraftPool {
     teamCount: snapshot.league.rules.teamCount,
   });
 
-  const players = input.players
-    .filter((player) => !keptPlayerIds.has(String(player.id)))
-    .flatMap((player) => {
-      const projectedPoints = projectedByPlayerId.get(String(player.id));
-      if (projectedPoints === undefined) {
-        return [];
-      }
-      return [
-        {
-          playerId: player.id,
-          sleeperPlayerId: player.sleeperPlayerId,
-          fullName: player.fullName,
-          position: player.position,
+  const priced = input.players.flatMap((player) => {
+    const projectedPoints = projectedByPlayerId.get(String(player.id));
+    if (projectedPoints === undefined) {
+      return [];
+    }
+    return [
+      {
+        playerId: player.id,
+        sleeperPlayerId: player.sleeperPlayerId,
+        fullName: player.fullName,
+        position: player.position,
+        projectedPoints,
+        intrinsicValue: computeIntrinsicValue({
           projectedPoints,
-          intrinsicValue: computeIntrinsicValue({
-            projectedPoints,
-            replacementLevel: replacementLevels[player.position] ?? 0,
-          }).intrinsicValue,
-        },
-      ];
-    })
-    // Name breaks ties so an equal-value pair keeps a stable order between builds.
-    .sort(
-      (left, right) =>
-        right.intrinsicValue - left.intrinsicValue || left.fullName.localeCompare(right.fullName),
-    );
+          replacementLevel: replacementLevels[player.position] ?? 0,
+        }).intrinsicValue,
+      },
+    ];
+  });
+
+  // Name breaks ties so an equal-value pair keeps a stable order between builds.
+  const byValue = (left: DraftPoolPlayer, right: DraftPoolPlayer): number =>
+    right.intrinsicValue - left.intrinsicValue || left.fullName.localeCompare(right.fullName);
+
+  const players = priced
+    .filter((player) => !keptPlayerIds.has(String(player.playerId)))
+    .sort(byValue);
+  const keptPlayers = priced
+    .filter((player) => keptPlayerIds.has(String(player.playerId)))
+    .sort(byValue);
 
   const postures = buildPostures(snapshot, order);
 
@@ -185,6 +200,7 @@ export function buildDraftPool(input: BuildDraftPoolInput): DraftPool {
   return {
     players,
     keptPlayerIds,
+    keptPlayers,
     order,
     postures,
     replacementLevels,
@@ -235,11 +251,18 @@ function resolveKeeperPicks(
 /** Every overall pick in order, owner taken from the inventory and keepers marked. */
 function buildOrder(
   snapshot: LeagueStateSnapshot,
-  keeperPicks: readonly { keeperRightId: KeeperRightId; resolvedOverallPick: number }[],
+  keeperPicks: readonly {
+    keeperRightId: KeeperRightId;
+    playerId: PlayerId;
+    resolvedOverallPick: number;
+  }[],
   blockers: string[],
 ): DraftSlotOwnership[] {
   const keeperByOverallPick = new Map(
-    keeperPicks.map((pick) => [pick.resolvedOverallPick, pick.keeperRightId]),
+    keeperPicks.map((pick) => [
+      pick.resolvedOverallPick,
+      { keeperRightId: pick.keeperRightId, playerId: pick.playerId },
+    ]),
   );
   const expected = snapshot.league.rules.teamCount * snapshot.league.rules.draftRounds;
 
@@ -263,7 +286,9 @@ function buildOrder(
               round: pick.round,
               slot: pick.slot,
               franchiseId: pick.currentFranchiseId,
-              consumedByKeeperRightId: keeperByOverallPick.get(pick.overallPick) ?? null,
+              consumedByKeeperRightId:
+                keeperByOverallPick.get(pick.overallPick)?.keeperRightId ?? null,
+              consumedByPlayerId: keeperByOverallPick.get(pick.overallPick)?.playerId ?? null,
             },
           ],
     )
