@@ -438,6 +438,56 @@ export class KeeperRepository {
     return selections.length;
   }
 
+  /** Every season stored for a league, oldest first. */
+  async readLeagueSeasonYears(): Promise<{ seasonId: SeasonId; seasonYear: number }[]> {
+    const { data, error } = await this.client.from('league_seasons').select('id, season_year');
+    unwrap('league_seasons', error);
+
+    return ((data ?? []) as { id: string; season_year: number }[])
+      .map((row) => ({ seasonId: row.id as SeasonId, seasonYear: row.season_year }))
+      .sort((left, right) => left.seasonYear - right.seasonYear);
+  }
+
+  /**
+   * Draft selections across every stored season.
+   *
+   * Read whole rather than per season because the thing it feeds -- how this league has
+   * actually drafted -- is a question about all of them at once, and the volume is a few
+   * hundred rows.
+   */
+  async readDraftSelections(pageSize = 1000): Promise<DraftSelectionRecord[]> {
+    const selections: DraftSelectionRecord[] = [];
+
+    for (let from = 0; ; from += pageSize) {
+      const { data, error } = await this.client
+        .from('draft_selections')
+        .select(
+          'sleeper_draft_id, season_id, overall_pick, round, slot, franchise_id, player_id, is_keeper, source',
+        )
+        .range(from, from + pageSize - 1);
+      unwrap('draft_selections', error);
+
+      const rows = (data ?? []) as Record<string, unknown>[];
+      for (const row of rows) {
+        selections.push({
+          sleeperDraftId: String(row.sleeper_draft_id),
+          seasonId: row.season_id as SeasonId,
+          overallPick: Number(row.overall_pick),
+          round: Number(row.round),
+          slot: row.slot === null ? null : Number(row.slot),
+          franchiseId: row.franchise_id === null ? null : String(row.franchise_id),
+          playerId: row.player_id === null ? null : String(row.player_id),
+          isKeeper: Boolean(row.is_keeper),
+          source: row.source as DraftSelectionRecord['source'],
+        });
+      }
+
+      if (rows.length < pageSize) {
+        return selections;
+      }
+    }
+  }
+
   /**
    * One row per rostered player, so this now runs to hundreds rather than dozens and is
    * batched like the catalog.

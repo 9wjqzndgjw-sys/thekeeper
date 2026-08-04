@@ -1,6 +1,16 @@
-import type { FranchiseId, SeasonId } from '@keeper/domain';
-import { buildDraftPool, createDraftSim } from '@keeper/draft-sim';
-import { createServiceClientFromEnv, loadLeagueSnapshot } from '@keeper/persistence';
+import type { FranchiseId, Position, SeasonId } from '@keeper/domain';
+import {
+  buildDraftMarket,
+  buildDraftPool,
+  createDraftSim,
+  positionalSharesByRound,
+  type HistoricalSelection,
+} from '@keeper/draft-sim';
+import {
+  createServiceClientFromEnv,
+  KeeperRepository,
+  loadLeagueSnapshot,
+} from '@keeper/persistence';
 import { resolveSleeperLeagueId } from './league-config.js';
 
 /**
@@ -57,13 +67,88 @@ if (!pool.readiness.ok) {
   process.exit(1);
 }
 
+// How this league has actually drafted, learned from its own past drafts. The current
+// season is excluded: it has not happened yet, and its stored selections are the keepers.
+const client = createServiceClientFromEnv();
+const repository = new KeeperRepository(client);
+const [pastSelections, seasonYears, allPlayers] = await Promise.all([
+  repository.readDraftSelections(),
+  repository.readLeagueSeasonYears(),
+  repository.readAllPlayers(),
+]);
+
+const yearBySeasonId = new Map(
+  seasonYears.map((entry) => [String(entry.seasonId), entry.seasonYear]),
+);
+const positionByPlayerId = new Map(allPlayers.map((player) => [player.id, player.position]));
+
+const history: HistoricalSelection[] = pastSelections.flatMap((selection) => {
+  const seasonYear = yearBySeasonId.get(String(selection.seasonId));
+  const position = selection.playerId ? positionByPlayerId.get(selection.playerId) : undefined;
+  if (
+    seasonYear === undefined ||
+    position === undefined ||
+    String(selection.seasonId) === seasonId
+  ) {
+    return [];
+  }
+  return [
+    {
+      seasonYear,
+      round: selection.round,
+      franchiseId: selection.franchiseId,
+      position: position as Position,
+      isKeeper: selection.isKeeper,
+    },
+  ];
+});
+
+const rounds = loaded.snapshot.league.rules.draftRounds;
+const marketInfluence = Number.parseFloat(flag('market') ?? '0.6');
+
+// Two passes. The first runs with history switched off to see what value and roster need
+// produce unaided; the second measures the league's habits against that rather than against
+// raw share, so the projections are not counted twice. Averaged over several seeds so one
+// unlucky draw does not set the baseline.
+const baselineSelections: { round: number; position: Position; isKeeper: boolean }[] = [];
+for (const baselineSeed of [11, 22, 33, 44]) {
+  const baselineSim = createDraftSim({
+    pool,
+    userFranchiseId: franchise.id as FranchiseId,
+    seed: baselineSeed,
+    marketInfluence: 0,
+  });
+  let baselineState = baselineSim.advance();
+  while (baselineState.status === 'awaiting_user') {
+    baselineState = baselineSim.submitUserPick(
+      baselineSim.getRecommendations(1)[0]!.player.playerId,
+    );
+  }
+  baselineSelections.push(...baselineState.selections);
+}
+
+const market = buildDraftMarket({
+  selections: history,
+  rounds,
+  valueBaseline: positionalSharesByRound(baselineSelections, rounds),
+});
+
 const sim = createDraftSim({
   pool,
   userFranchiseId: franchise.id as FranchiseId,
   seed,
+  market,
+  marketInfluence,
 });
 
-console.log(`Rehearsing as ${franchise.displayName}, seed ${seed}\n`);
+console.log(`Rehearsing as ${franchise.displayName}, seed ${seed}`);
+console.log(
+  `Market: ${market.picksObserved} past picks over ${market.seasonsObserved.length} season(s) ` +
+    `(${market.seasonsObserved.join(', ')}), influence ${marketInfluence}\n`,
+);
+for (const note of market.notes) {
+  console.log(`  note: ${note}`);
+}
 
 let state = sim.advance();
 while (state.status === 'awaiting_user') {

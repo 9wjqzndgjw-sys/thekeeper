@@ -1,5 +1,6 @@
 import type { FranchiseId, PlayerId, Position } from '@keeper/domain';
 import type { DraftPool, DraftPoolPlayer, DraftSlotOwnership } from './pool.js';
+import { marketWeight, type DraftMarket } from './market.js';
 import { createRng, sampleWeightedIndex, type Rng } from './rng.js';
 import {
   emptyCounts,
@@ -80,14 +81,26 @@ export interface DraftSimOptions {
   benchAllowance?: Partial<Record<Position, number>>;
   /** Set false to draft pure best-available, ignoring rosters entirely. */
   useRosterNeed?: boolean;
+  /** How this league has drafted before. Omit to run on value and need alone. */
+  market?: DraftMarket;
+  /**
+   * How strongly history steers the bots, as an exponent on the learned bias.
+   *
+   * Zero ignores it. One applies it at face value, which over-steers: the history is a few
+   * hundred picks and the projections are the better evidence about who is actually worth
+   * taking. The default keeps it a lean.
+   */
+  marketInfluence?: number;
 }
 
 /** A candidate for the pick on the clock, scored the way a bot would score it. */
 export interface DraftRecommendation {
   player: DraftPoolPlayer;
-  /** Intrinsic value tilted by what this roster still needs. */
+  /** Intrinsic value tilted by what this roster needs and when the league takes it. */
   score: number;
   needWeight: number;
+  /** 1 when history is silent; above 1 where this league takes the position early. */
+  marketWeight: number;
 }
 
 export interface DraftSim {
@@ -114,6 +127,7 @@ const DEFAULTS = {
   candidateWindow: 8,
   reachTemperature: 12,
   scanWindow: 60,
+  marketInfluence: 0.6,
 } as const;
 
 /**
@@ -143,6 +157,8 @@ export function createDraftSim(options: DraftSimOptions): DraftSim {
     benchAllowance: options.benchAllowance ?? DEFAULT_BENCH_ALLOWANCE,
     useRosterNeed: options.useRosterNeed ?? true,
     lineup: options.pool.lineup,
+    market: options.market ?? null,
+    marketInfluence: options.marketInfluence ?? DEFAULTS.marketInfluence,
   };
   if (config.candidateWindow < 1) {
     throw new Error(`candidateWindow must be at least 1; received ${config.candidateWindow}.`);
@@ -313,10 +329,25 @@ export function createDraftSim(options: DraftSimOptions): DraftSim {
    * then drafted one. Every team ended up with two defences, which is precisely the
    * absurdity roster need exists to prevent.
    */
-  function candidatesFor(
-    franchiseId: FranchiseId,
-  ): { player: DraftPoolPlayer; index: number; score: number; needWeight: number }[] {
+  function candidatesFor(franchiseId: FranchiseId): {
+    player: DraftPoolPlayer;
+    index: number;
+    score: number;
+    needWeight: number;
+    marketWeight: number;
+  }[] {
     const weights = weightsFor(franchiseId);
+    const round = cursor < order.length ? order[cursor]!.round : 1;
+    const market: Record<Position, number> =
+      config.market === null
+        ? { QB: 1, RB: 1, WR: 1, TE: 1, DEF: 1 }
+        : {
+            QB: marketWeight(config.market, 'QB', round, franchiseId, config.marketInfluence),
+            RB: marketWeight(config.market, 'RB', round, franchiseId, config.marketInfluence),
+            WR: marketWeight(config.market, 'WR', round, franchiseId, config.marketInfluence),
+            TE: marketWeight(config.market, 'TE', round, franchiseId, config.marketInfluence),
+            DEF: marketWeight(config.market, 'DEF', round, franchiseId, config.marketInfluence),
+          };
     const needInput = {
       lineup: config.lineup,
       counts: rosters.get(franchiseId)!,
@@ -331,8 +362,13 @@ export function createDraftSim(options: DraftSimOptions): DraftSim {
         ? new Set(unfilledStarterPositions(config.lineup, needInput.counts))
         : null;
 
-    const scored: { player: DraftPoolPlayer; index: number; score: number; needWeight: number }[] =
-      [];
+    const scored: {
+      player: DraftPoolPlayer;
+      index: number;
+      score: number;
+      needWeight: number;
+      marketWeight: number;
+    }[] = [];
 
     for (let index = 0; index < available.length; index += 1) {
       const player = available[index]!;
@@ -343,8 +379,9 @@ export function createDraftSim(options: DraftSimOptions): DraftSim {
       scored.push({
         player,
         index,
-        score: player.intrinsicValue * weight,
+        score: player.intrinsicValue * weight * market[player.position],
         needWeight: weight,
+        marketWeight: market[player.position],
       });
       if (scored.length >= config.scanWindow) {
         break;
@@ -432,6 +469,7 @@ export function createDraftSim(options: DraftSimOptions): DraftSim {
           player: entry.player,
           score: entry.score,
           needWeight: entry.needWeight,
+          marketWeight: entry.marketWeight,
         }));
     },
 
