@@ -6,6 +6,7 @@ import type { BoardViewModel } from '../view-models/boards.js';
 import { buildKeeperModes } from '../view-models/keeper-modes.js';
 import type { PickHorizon } from '../view-models/pick-horizon.js';
 import type { SyncStatusViewModel } from '../view-models/sync-status.js';
+import { PanelShell } from './panel-shell.js';
 
 const POSITIONS: Position[] = ['QB', 'RB', 'WR', 'TE', 'DEF'];
 
@@ -151,55 +152,79 @@ export function PickHorizonPanel({ horizon }: { horizon: PickHorizon }) {
   );
 }
 
-export function BoardPanel({ board }: { board: BoardViewModel }) {
+export function BoardPanel({
+  board,
+  expanded = false,
+  onExpand,
+  onClose,
+}: {
+  board: BoardViewModel;
+  expanded?: boolean;
+  onExpand?: () => void;
+  onClose?: () => void;
+}) {
   return (
-    <section className="panel">
-      <h2>{board.title}</h2>
+    <PanelShell title={board.title} expanded={expanded} onExpand={onExpand ?? noop} onClose={onClose ?? noop}>
       <p className="muted">{board.poolDescription}</p>
       {board.caveats.map((caveat) => (
         <p key={caveat} className="warning">
           {caveat}
         </p>
       ))}
-      <table>
-        <thead>
-          <tr>
-            <th>Rank</th>
-            <th>Tier</th>
-            <th>Player</th>
-            <th>Pos</th>
-            <th>Proj</th>
-            <th>IV</th>
-            {/* Beside the league's own valuation rather than instead of it. Where the two
-                disagree is the part of a board worth reading before a pick. */}
-            <th>ADP</th>
-            <th>At your pick</th>
-          </tr>
-        </thead>
-        <tbody>
-          {board.board.rows.map((row) => (
-            <tr key={row.playerId}>
-              <td>{row.rank}</td>
-              <td>{row.tier}</td>
-              <td>{row.fullName}</td>
-              <td>{row.position}</td>
-              <td>{formatNumber(row.projectedPoints)}</td>
-              <td>{formatNumber(row.intrinsicValue)}</td>
-              {/* An em dash where the source ranked nobody -- a defence has no ADP, and a
-                  zero there would read as the first pick of the draft. */}
-              <td>
-                {row.averageDraftPosition === null ? '—' : formatNumber(row.averageDraftPosition)}
-              </td>
-              <td>
-                {row.valueAtUserNextPick === null ? '—' : formatNumber(row.valueAtUserNextPick)}
-              </td>
+      <p className="table-scroll-hint muted">Scroll sideways to see every column.</p>
+      <div className="data-table-wrap responsive-table--board">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th scope="col">Rank</th>
+              <th scope="col">Tier</th>
+              <th scope="col">Player</th>
+              <th scope="col">Pos</th>
+              <th scope="col" className="numeric">
+                Proj
+              </th>
+              <th scope="col" className="numeric">
+                IV
+              </th>
+              {/* Beside the league's own valuation rather than instead of it. Where the two
+                  disagree is the part of a board worth reading before a pick. */}
+              <th scope="col" className="numeric">
+                ADP
+              </th>
+              <th scope="col" className="numeric">
+                At your pick
+              </th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </section>
+          </thead>
+          <tbody>
+            {board.board.rows.map((row) => (
+              <tr key={row.playerId}>
+                <td className="numeric">{row.rank}</td>
+                <td className="numeric">{row.tier}</td>
+                <td>{row.fullName}</td>
+                <td>{row.position}</td>
+                <td className="numeric">{formatNumber(row.projectedPoints)}</td>
+                <td className="numeric">{formatNumber(row.intrinsicValue)}</td>
+                {/* An em dash where the source ranked nobody -- a defence has no ADP, and a
+                    zero there would read as the first pick of the draft. */}
+                <td className="numeric">
+                  {row.averageDraftPosition === null
+                    ? '—'
+                    : formatNumber(row.averageDraftPosition)}
+                </td>
+                <td className="numeric">
+                  {row.valueAtUserNextPick === null ? '—' : formatNumber(row.valueAtUserNextPick)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </PanelShell>
   );
 }
+
+function noop(): void {}
 
 export function KeeperCombinationsPanel({ outlook }: { outlook: FranchiseOutlook }) {
   // Every rostered player is a candidate, so the full list runs to hundreds of sets. The
@@ -227,37 +252,50 @@ export function KeeperCombinationsPanel({ outlook }: { outlook: FranchiseOutlook
       {/* Each mode maximises a different quantity, so the scores are not on one scale and
           the column that names the quantity is doing real work. The components sit beside
           the score for the same reason. */}
-      <table>
-        <thead>
-          <tr>
-            <th>Mode</th>
-            <th>Maximises</th>
-            <th>Score</th>
-            <th>IV</th>
-            <th>Pick cost</th>
-            <th>KSV</th>
-            <th>Keepers</th>
-          </tr>
-        </thead>
-        <tbody>
-          {modes.rows.map((row) => (
-            <tr key={row.mode}>
-              <td>{row.mode}</td>
-              <td className="muted-cell">{row.optimises}</td>
-              <td>{formatNumber(row.score)}</td>
-              <td>{formatNumber(row.retainedIntrinsicValue)}</td>
-              <td>{formatNumber(row.consumedPickValue)}</td>
-              <td>{formatNumber(row.keeperSurplusValue)}</td>
-              <td>
-                {row.keepers}
-                {row.agreesWith.length > 0 ? (
-                  <span className="muted-cell"> · same set as {row.agreesWith.join(', ')}</span>
-                ) : null}
-              </td>
+      <p className="table-scroll-hint muted">Scroll sideways to see every column.</p>
+      <div className="data-table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th scope="col">Mode</th>
+              <th scope="col">Maximises</th>
+              <th scope="col" className="numeric">
+                Score
+              </th>
+              <th scope="col" className="numeric">
+                IV
+              </th>
+              <th scope="col" className="numeric">
+                Pick cost
+              </th>
+              <th scope="col" className="numeric">
+                KSV
+              </th>
+              <th scope="col" className="numeric">
+                Keepers
+              </th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {modes.rows.map((row) => (
+              <tr key={row.mode}>
+                <td>{row.mode}</td>
+                <td className="muted-cell">{row.optimises}</td>
+                <td className="numeric">{formatNumber(row.score)}</td>
+                <td className="numeric">{formatNumber(row.retainedIntrinsicValue)}</td>
+                <td className="numeric">{formatNumber(row.consumedPickValue)}</td>
+                <td className="numeric">{formatNumber(row.keeperSurplusValue)}</td>
+                <td className="numeric">
+                  {row.keepers}
+                  {row.agreesWith.length > 0 ? (
+                    <span className="muted-cell"> · same set as {row.agreesWith.join(', ')}</span>
+                  ) : null}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       {modes.notes.map((note) => (
         <p key={note} className="warning">
           {note}
@@ -265,34 +303,47 @@ export function KeeperCombinationsPanel({ outlook }: { outlook: FranchiseOutlook
       ))}
 
       <h3>Best fifteen sets</h3>
-      <table>
-        <thead>
-          <tr>
-            <th>Score</th>
-            <th>Keepers</th>
-            <th>Retained IV</th>
-            <th>Pick cost</th>
-            <th>KSV</th>
-            <th>Floor KSV</th>
-          </tr>
-        </thead>
-        <tbody>
-          {ranked.map((combination) => {
-            const key = combination.selectedKeeperRightIds.join('|');
-            const floor = floorByIds.get(key);
-            return (
-              <tr key={key || 'none'}>
-                <td>{formatNumber(combination.totalScore)}</td>
-                <td>{describeKeepers(combination)}</td>
-                <td>{formatNumber(combination.retainedIntrinsicValue)}</td>
-                <td>{formatNumber(combination.consumedPickValue)}</td>
-                <td>{formatNumber(combination.keeperSurplusValue)}</td>
-                <td>{floor ? formatNumber(floor.keeperSurplusValue) : '—'}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+      <p className="table-scroll-hint muted">Scroll sideways to see every column.</p>
+      <div className="data-table-wrap responsive-table--keeper-combinations">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th scope="col" className="numeric">
+                Score
+              </th>
+              <th scope="col">Keepers</th>
+              <th scope="col" className="numeric">
+                Retained IV
+              </th>
+              <th scope="col" className="numeric">
+                Pick cost
+              </th>
+              <th scope="col" className="numeric">
+                KSV
+              </th>
+              <th scope="col" className="numeric">
+                Floor KSV
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {ranked.map((combination) => {
+              const key = combination.selectedKeeperRightIds.join('|');
+              const floor = floorByIds.get(key);
+              return (
+                <tr key={key || 'none'}>
+                  <td className="numeric">{formatNumber(combination.totalScore)}</td>
+                  <td>{describeKeepers(combination)}</td>
+                  <td className="numeric">{formatNumber(combination.retainedIntrinsicValue)}</td>
+                  <td className="numeric">{formatNumber(combination.consumedPickValue)}</td>
+                  <td className="numeric">{formatNumber(combination.keeperSurplusValue)}</td>
+                  <td className="numeric">{floor ? formatNumber(floor.keeperSurplusValue) : '—'}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </section>
   );
 }

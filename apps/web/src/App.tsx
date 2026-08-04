@@ -142,6 +142,10 @@ export function Dashboard({
     activeRehearsal ? readRehearsal(activeRehearsal) : null,
   );
   const [busy, setBusy] = useState(false);
+  // Which dense panel, if any, is currently popped out to (near-)full viewport. Only one at a
+  // time -- the rest of the dashboard becomes inert while it is up, which would be
+  // meaningless for two panels simultaneously fighting for the same overlay.
+  const [expandedPanel, setExpandedPanel] = useState<'onTheClock' | 'board' | null>(null);
 
   // Follows the rehearsal rather than the render, so a stale view cannot outlive the draft
   // it described.
@@ -255,62 +259,88 @@ export function Dashboard({
       .finally(() => setBusy(false));
   };
 
+  const anyPanelExpanded = expandedPanel !== null;
+
   return (
     <main>
-      <PageHeader demoMode={demoMode} rehearsing={rehearse}>
-        {!rehearse && (
-          <button type="button" onClick={() => void tracker.refreshNow()}>
-            Refresh now
-          </button>
-        )}
-      </PageHeader>
+      {/* Background content is made inert rather than removed while a panel is popped out, so
+          the popped-out panel stays the only thing tab and pointer input can reach without
+          moving it out of its normal place in the page -- and without touching the mounted
+          panels that hold state (OnTheClockPanel's search box, BoardPanel's scroll position),
+          which a remount would reset. */}
+      <div inert={anyPanelExpanded || undefined}>
+        <PageHeader demoMode={demoMode} rehearsing={rehearse}>
+          {!rehearse && (
+            <button type="button" onClick={() => void tracker.refreshNow()}>
+              Refresh now
+            </button>
+          )}
+        </PageHeader>
 
-      <DataSourcePanel
-        context={context}
-        franchiseId={franchiseId}
-        onFranchiseChange={setFranchiseId}
-      />
-      <SyncStatusPanel status={syncStatus} />
-      <SetupPanel
-        snapshot={context.snapshot}
-        replacementLevels={context.scenarios.replacementLevels}
-      />
-      {rehearsalError && (
-        <section className="panel tone-error">
-          <h2>Cannot rehearse this league</h2>
-          <p>{rehearsalError}</p>
-        </section>
-      )}
+        <DataSourcePanel
+          context={context}
+          franchiseId={franchiseId}
+          onFranchiseChange={setFranchiseId}
+        />
+        <SyncStatusPanel status={syncStatus} />
+        <SetupPanel
+          snapshot={context.snapshot}
+          replacementLevels={context.scenarios.replacementLevels}
+        />
+        {rehearsalError && (
+          <section className="panel tone-error">
+            <h2>Cannot rehearse this league</h2>
+            <p>{rehearsalError}</p>
+          </section>
+        )}
+      </div>
 
       {activeRehearsal && rehearsalView && (
-        <OnTheClockPanel
-          view={rehearsalView}
-          franchiseName={rehearsalFranchiseName}
-          busy={busy}
-          onPick={(playerId) => runPick((rehearsal) => submitPick(rehearsal, playerId))}
-          onUndo={() => runPick(undoPick)}
-        />
+        <div inert={(anyPanelExpanded && expandedPanel !== 'onTheClock') || undefined}>
+          <OnTheClockPanel
+            view={rehearsalView}
+            franchiseName={rehearsalFranchiseName}
+            busy={busy}
+            onPick={(playerId) => runPick((rehearsal) => submitPick(rehearsal, playerId))}
+            onUndo={() => runPick(undoPick)}
+            expanded={expandedPanel === 'onTheClock'}
+            onExpand={() => setExpandedPanel('onTheClock')}
+            onClose={() => setExpandedPanel(null)}
+          />
+        </div>
       )}
 
-      <PickHorizonPanel horizon={horizon} />
+      <div inert={anyPanelExpanded || undefined}>
+        <PickHorizonPanel horizon={horizon} />
 
-      <nav className="board-tabs">
-        {boards.map((board) => (
-          <button
-            key={board.mode}
-            type="button"
-            aria-pressed={board.mode === activeBoard}
-            className={board.mode === activeBoard ? 'active' : undefined}
-            onClick={() => setActiveBoard(board.mode)}
-          >
-            {board.title}
-          </button>
-        ))}
-      </nav>
-      <BoardPanel board={visibleBoard} />
+        <nav className="board-tabs">
+          {boards.map((board) => (
+            <button
+              key={board.mode}
+              type="button"
+              aria-pressed={board.mode === activeBoard}
+              className={board.mode === activeBoard ? 'active' : undefined}
+              onClick={() => setActiveBoard(board.mode)}
+            >
+              {board.title}
+            </button>
+          ))}
+        </nav>
+      </div>
 
-      <RecommendationPanel outlook={optimization} />
-      <KeeperCombinationsPanel outlook={optimization} />
+      <div inert={(anyPanelExpanded && expandedPanel !== 'board') || undefined}>
+        <BoardPanel
+          board={visibleBoard}
+          expanded={expandedPanel === 'board'}
+          onExpand={() => setExpandedPanel('board')}
+          onClose={() => setExpandedPanel(null)}
+        />
+      </div>
+
+      <div inert={anyPanelExpanded || undefined}>
+        <RecommendationPanel outlook={optimization} />
+        <KeeperCombinationsPanel outlook={optimization} />
+      </div>
     </main>
   );
 }
