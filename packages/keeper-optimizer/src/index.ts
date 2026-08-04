@@ -732,20 +732,22 @@ function buildResolutionExplanation(
   }
 
   const resolvedLines = resolvedPicks.map(
-    (pick) =>
-      `${pick.keeperRightId}: nominal round ${pick.nominalRound} -> ${formatResolvedPick(pick)}`,
+    (pick) => `${pick.keeperRightId}: ${formatResolvedPick(pick)}`,
   );
   const displacementLines = displacements.map((event) => `${event.keeperRightId}: ${event.reason}`);
 
   return [...resolvedLines, ...displacementLines].join('\n');
 }
 
+/** "Rd.pick / overall pick", e.g. "7.05 / 77" -- the nominal round is not repeated here; a
+ * displacement already gets its own line, and when nothing was displaced the nominal round is
+ * just the round half of this same number. */
 function formatResolvedPick(pick: ResolvedKeeperPick): string {
   const slotLabel =
     pick.resolvedSlot === null
       ? `round ${pick.resolvedRound}`
       : formatDraftPick(pick.resolvedRound, pick.resolvedSlot);
-  return `${slotLabel} (overall ${pick.resolvedOverallPick})`;
+  return `${slotLabel} / ${pick.resolvedOverallPick}`;
 }
 
 function describePick(pick: DraftPickAsset): string {

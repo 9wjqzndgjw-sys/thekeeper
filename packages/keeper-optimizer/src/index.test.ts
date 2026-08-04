@@ -412,8 +412,10 @@ describe('optimizeKeeperCombinations', () => {
         combination.selectedKeeperRightIds[0] === 'keeper-jayden-daniels-r5',
     );
 
-    expect(jaydenOnly?.explanation).toContain('Jayden Daniels: nominal round 5 ->');
+    // Jayden resolves to round 4, slot 8, overall 41 -- "Rd.pick / overall pick".
+    expect(jaydenOnly?.explanation).toContain('Jayden Daniels: 4.08 / 41');
     expect(jaydenOnly?.explanation).not.toContain('keeper-jayden-daniels-r5');
+    expect(jaydenOnly?.explanation).not.toContain('nominal round');
   });
 
   it('throws clearly when a selected keeper cannot be matched to player metadata', () => {

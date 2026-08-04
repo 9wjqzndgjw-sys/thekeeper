@@ -1,3 +1,4 @@
+import { formatDraftPick } from '@keeper/domain';
 import type { FranchiseId, LeagueStateSnapshot, Position } from '@keeper/domain';
 import type { KeeperOptimizationResult } from '@keeper/keeper-optimizer';
 import type { ReplacementLevels } from '@keeper/valuation';
@@ -410,11 +411,16 @@ function describeKeepers(combination: KeeperOptimizationResult['combinations'][n
     return 'Keep nobody';
   }
   return combination.playerValuations
-    .map(
-      (player) =>
-        `${player.fullName} (round ${player.nominalRound} → overall ${player.resolvedOverallPick})`,
-    )
+    .map((player) => `${player.fullName} (${formatPickLabel(player)} / ${player.resolvedOverallPick})`)
     .join(', ');
+}
+
+/** "Rd.pick", e.g. "7.05" -- falls back to a bare round number on the rare pick with no
+ * assigned slot, same as the optimizer's own explanation text does. */
+function formatPickLabel(player: { resolvedRound: number; resolvedSlot: number | null }): string {
+  return player.resolvedSlot === null
+    ? `round ${player.resolvedRound}`
+    : formatDraftPick(player.resolvedRound, player.resolvedSlot);
 }
 
 function formatNumber(value: number): string {
