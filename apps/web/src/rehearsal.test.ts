@@ -27,6 +27,32 @@ describe('createRehearsal', () => {
     expect(view.canUndo).toBe(false);
   });
 
+  it('drafts as the franchise it was asked for, not the snapshot default', () => {
+    // The bug this exists to catch: the rehearsal was built once with the default franchise
+    // while every label around it followed the team picker, so the panel announced one
+    // team's pick over another team's roster. Being stuck was the lesser half; being
+    // mislabelled meant the numbers on screen belonged to nobody on screen.
+    const context = createMockDraftAppContext();
+    const chosen = context.snapshot.franchises.find(
+      (franchise) => franchise.id !== context.snapshot.userFranchiseId,
+    )!;
+
+    const rehearsal = createRehearsal({ context, franchiseId: chosen.id });
+    if ('error' in rehearsal) {
+      throw new Error(rehearsal.error);
+    }
+
+    expect(rehearsal.userFranchiseId).toBe(chosen.id);
+
+    const view = readRehearsal(rehearsal);
+    // The clock stops on a pick that franchise actually owns.
+    expect(view.onTheClock?.franchiseId).toBe(chosen.id);
+    // And everything marked as the user's belongs to them, keepers included.
+    for (const selection of view.selections.filter((entry) => entry.byUser)) {
+      expect(selection.franchiseId).toBe(chosen.id);
+    }
+  });
+
   it('reports why rather than throwing when the league cannot be rehearsed', () => {
     const context = createMockDraftAppContext();
     const result = createRehearsal({

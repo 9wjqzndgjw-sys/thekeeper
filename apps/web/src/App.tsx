@@ -111,9 +111,26 @@ export function Dashboard({
   demoMode?: boolean;
   rehearse?: boolean;
 }) {
-  // Built once per league. Rebuilding would restart the draft, which is the one thing a
-  // rehearsal must not do by accident.
-  const [rehearsal] = useState(() => (rehearse ? createRehearsal({ context }) : null));
+  const [franchiseId, setFranchiseId] = useState<FranchiseId>(context.snapshot.userFranchiseId);
+
+  // Rebuilt whenever the team being viewed changes, because a rehearsal is drafted *as*
+  // somebody. Built once and left alone, it went on drafting as whichever team the snapshot
+  // happened to default to while every label around it followed the picker -- so the panel
+  // announced one team's pick over another team's roster, which is worse than being stuck.
+  //
+  // Switching teams therefore restarts the draft. There is no honest alternative: a draft in
+  // progress belongs to the team that made its picks.
+  const [rehearsal, setRehearsal] = useState(() =>
+    rehearse ? createRehearsal({ context, franchiseId: context.snapshot.userFranchiseId }) : null,
+  );
+
+  useEffect(() => {
+    if (!rehearse) {
+      return;
+    }
+    setRehearsal(createRehearsal({ context, franchiseId }));
+  }, [rehearse, context, franchiseId]);
+
   const activeRehearsal = rehearsal && 'sim' in rehearsal ? rehearsal : null;
   const rehearsalError = rehearsal && 'error' in rehearsal ? rehearsal.error : null;
 
@@ -126,6 +143,12 @@ export function Dashboard({
   );
   const [busy, setBusy] = useState(false);
 
+  // Follows the rehearsal rather than the render, so a stale view cannot outlive the draft
+  // it described.
+  useEffect(() => {
+    setRehearsalView(activeRehearsal ? readRehearsal(activeRehearsal) : null);
+  }, [activeRehearsal]);
+
   const [trackerState, setTrackerState] = useState<DraftTrackerState>(() => tracker.getState());
   // Re-renders the relative "synced Ns ago" reading without waiting on a poll.
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -134,7 +157,6 @@ export function Dashboard({
   const [activeBoard, setActiveBoard] = useState<BoardMode>(() =>
     context.snapshot.draft?.status === 'drafting' ? 'live' : 'as_declared',
   );
-  const [franchiseId, setFranchiseId] = useState<FranchiseId>(context.snapshot.userFranchiseId);
 
   useEffect(() => {
     const unsubscribe = tracker.subscribe((_events, state) => {
@@ -198,9 +220,14 @@ export function Dashboard({
 
   const visibleBoard = boards.find((board) => board.mode === activeBoard) ?? boards[0]!;
 
-  const franchiseName =
-    context.snapshot.franchises.find((franchise) => franchise.id === franchiseId)?.displayName ??
-    'your team';
+  // Read off the rehearsal itself, never off the picker. The two agree now, but a label
+  // sourced from the selector is a label that can describe a draft nobody is playing -- and
+  // the failure is silent, because a wrong team name still reads as a right one.
+  const rehearsalFranchiseName = activeRehearsal
+    ? (context.snapshot.franchises.find(
+        (franchise) => franchise.id === activeRehearsal.userFranchiseId,
+      )?.displayName ?? String(activeRehearsal.userFranchiseId))
+    : 'your team';
 
   // Awaited so the board a person sees after picking already includes everything the room
   // did in response to it.
@@ -244,7 +271,7 @@ export function Dashboard({
       {activeRehearsal && rehearsalView && (
         <OnTheClockPanel
           view={rehearsalView}
-          franchiseName={franchiseName}
+          franchiseName={rehearsalFranchiseName}
           busy={busy}
           onPick={(playerId) => runPick((rehearsal) => submitPick(rehearsal, playerId))}
           onUndo={() => runPick(undoPick)}

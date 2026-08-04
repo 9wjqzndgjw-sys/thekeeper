@@ -72,6 +72,26 @@ describe('Dashboard', () => {
     expect(demoMarkup).toContain('36 declared');
     expect(demoMarkup).toContain('Live board');
   });
+
+  it('names the team whose pick it actually is when rehearsing', () => {
+    // The on-the-clock panel once took its team name from the picker while the draft ran as
+    // whichever team the snapshot defaulted to, so it announced one team's pick above
+    // another team's roster. A wrong name still reads as a right one, which is what made it
+    // worth pinning: the header has to name whoever owns the pick being offered.
+    const context = createMockDraftAppContext();
+    const rehearsalMarkup = renderToStaticMarkup(
+      createElement(Dashboard, { context, rehearse: true }),
+    );
+
+    const owner = context.snapshot.franchises.find(
+      (franchise) => franchise.id === context.snapshot.userFranchiseId,
+    )!;
+
+    expect(rehearsalMarkup).toContain('You are on the clock');
+    expect(rehearsalMarkup).toContain(owner.displayName);
+    // Rendered from the rehearsal, so the roster shown belongs to the team just named.
+    expect(rehearsalMarkup).toContain('Your roster');
+  });
 });
 
 describe('createAppContext', () => {
