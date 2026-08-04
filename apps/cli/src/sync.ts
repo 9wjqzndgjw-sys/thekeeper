@@ -7,6 +7,7 @@ import {
   reconstructKeeperRights,
   RECORDED_LEAGUE_POLICY,
   resolveSleeperLeagueContinuity,
+  type NormalizedSleeperDraftPick,
 } from '@keeper/sleeper-adapter';
 import { createServiceClientFromEnv, KeeperRepository } from '@keeper/persistence';
 import type { LeagueId, SeasonId } from '@keeper/domain';
@@ -73,9 +74,10 @@ console.log(`Importing league ${sleeperLeagueId}...`);
 let imported: Awaited<ReturnType<typeof importSeasonDraftState>>;
 let league: Awaited<ReturnType<typeof adapter.getLeague>>;
 let leagueId: LeagueId;
+let continuity: Awaited<ReturnType<typeof resolveSleeperLeagueContinuity>>;
 try {
   league = await adapter.getLeague(sleeperLeagueId);
-  const continuity = await resolveSleeperLeagueContinuity({
+  continuity = await resolveSleeperLeagueContinuity({
     current: league.data,
     loadLeague: async (id) => (await adapter.getLeague(id)).data,
   });
@@ -115,12 +117,12 @@ const priorLeagueId = league.data.previousSleeperLeagueId;
 const playerNames: Record<string, string> = {};
 
 /**
- * The prior season as a persistable record.
+ * A past season as a persistable record.
  *
  * Gathered here but written in the persist phase below, so the import keeps its shape of
  * reading everything first and writing once.
  */
-interface PriorSeasonState {
+interface HistoricalSeasonState {
   seasonId: SeasonId;
   sleeperLeagueId: string;
   seasonYear: number;
@@ -133,109 +135,137 @@ interface PriorSeasonState {
   lineup: Record<string, unknown>;
   rules: Record<string, unknown>;
   franchises: Parameters<KeeperRepository['saveFranchises']>[1];
-  selections: readonly {
-    sleeperDraftId: string;
-    pickNo: number;
-    round: number;
-    draftSlot: number | null;
-    rosterId: number | null;
-    sleeperPlayerId: string | null;
-    isKeeper: boolean;
-  }[];
+  selections: readonly NormalizedSleeperDraftPick[];
   rosterIdToFranchiseId: Record<number, string>;
 }
-let priorSeason: PriorSeasonState | null = null;
 
-if (priorLeagueId) {
-  const priorDrafts = await adapter.getLeagueDrafts(priorLeagueId);
-  const priorDraft = priorDrafts.data[0];
-  if (priorDraft) {
-    const priorPicks = await adapter.getDraftPicks(priorDraft.sleeperDraftId);
-    for (const pick of priorPicks.data) {
-      const metadata = pick.metadata as { first_name?: string; last_name?: string };
-      if (pick.sleeperPlayerId && metadata?.first_name) {
-        playerNames[pick.sleeperPlayerId] =
-          `${metadata.first_name} ${metadata.last_name ?? ''}`.trim();
-      }
+/**
+ * Every completed season the chain knows about, oldest last.
+ *
+ * One season back is enough to price this year's keepers, but not to check them. A keeper
+ * displaced onto an earlier pick is recorded at the round it actually consumed, so reading
+ * next year's cost off that recorded round accelerates the player's curve permanently --
+ * and telling that apart from ordinary progression needs the season before it too. With
+ * the whole chain stored, nominal and effective can be compared for every keeper in every
+ * season rather than assumed equal.
+ */
+const historicalSeasons: HistoricalSeasonState[] = [];
+for (const historicalLeagueId of continuity.sleeperLeagueIds.filter(
+  (id) => id !== sleeperLeagueId,
+)) {
+  const captured = await captureHistoricalSeason(historicalLeagueId);
+  if (captured) {
+    historicalSeasons.push(captured);
+  }
+}
+
+// Keeper costs come from the season immediately before this one, which the chain walk has
+// already read. Reusing it here avoids fetching the same draft twice.
+const priorSeason =
+  historicalSeasons.find((season) => season.sleeperLeagueId === priorLeagueId) ?? null;
+
+if (priorSeason) {
+  for (const pick of priorSeason.selections) {
+    const metadata = pick.metadata as { first_name?: string; last_name?: string };
+    if (pick.sleeperPlayerId && metadata?.first_name) {
+      playerNames[pick.sleeperPlayerId] =
+        `${metadata.first_name} ${metadata.last_name ?? ''}`.trim();
     }
-    const reconstructed = reconstructKeeperRights({
-      seasonId,
-      rosters: rosters.data,
-      rosterIdToFranchiseId: franchiseMap.rosterIdToFranchiseId,
-      priorSeasonSelections: priorPicks.data,
-      undraftedKeeperRound: RECORDED_LEAGUE_POLICY.undraftedKeeperRound,
-      costAdvancePerSeason: RECORDED_LEAGUE_POLICY.keeperCostAdvancePerSeason,
-      playerNameBySleeperId: playerNames,
+  }
+  const reconstructed = reconstructKeeperRights({
+    seasonId,
+    rosters: rosters.data,
+    rosterIdToFranchiseId: franchiseMap.rosterIdToFranchiseId,
+    priorSeasonSelections: [...priorSeason.selections],
+    undraftedKeeperRound: RECORDED_LEAGUE_POLICY.undraftedKeeperRound,
+    costAdvancePerSeason: RECORDED_LEAGUE_POLICY.keeperCostAdvancePerSeason,
+    playerNameBySleeperId: playerNames,
+  });
+  keeperRights = reconstructed.keeperRights;
+  declaredSleeperPlayerIds = reconstructed.declaredSleeperPlayerIds;
+
+  for (const diagnostic of reconstructed.diagnostics) {
+    console.warn(`  [${diagnostic.code}] ${diagnostic.message}`);
+    if (diagnostic.level === 'error') {
+      keeperReconstructionErrorCount += 1;
+    }
+  }
+}
+
+/**
+ * Reads one past season into a persistable record, or reports why it could not.
+ *
+ * Franchise identity is owner-derived and league-scoped, and the league id is the stable
+ * root from the continuity chain, so a manager resolves to the same franchise in every
+ * season and a selection can be attributed to whoever actually made it.
+ *
+ * A season that cannot be read is a gap in the history, not a failure of the import that
+ * only observes it, so this returns null and the run continues.
+ */
+async function captureHistoricalSeason(
+  historicalLeagueId: string,
+): Promise<HistoricalSeasonState | null> {
+  try {
+    const drafts = await adapter.getLeagueDrafts(historicalLeagueId);
+    const draft = drafts.data[0];
+    if (!draft) {
+      console.warn(`\n  Season ${historicalLeagueId} has no draft to record.`);
+      return null;
+    }
+
+    const [historicalLeague, picks, historicalRosters, historicalUsers] = await Promise.all([
+      adapter.getLeague(historicalLeagueId),
+      adapter.getDraftPicks(draft.sleeperDraftId),
+      adapter.getLeagueRosters(historicalLeagueId),
+      adapter.getLeagueUsers(historicalLeagueId),
+    ]);
+
+    const historicalFranchiseMap = buildFranchiseMap({
+      leagueId,
+      rosters: historicalRosters.data,
+      users: historicalUsers.data,
     });
-    keeperRights = reconstructed.keeperRights;
-    declaredSleeperPlayerIds = reconstructed.declaredSleeperPlayerIds;
+    const historicalTeamCount = draft.teamCount ?? historicalLeague.data.totalRosters;
+    const historicalRounds =
+      draft.rounds ?? draftRoundsFallback(picks.data.length, historicalTeamCount);
+    const historicalLineup = deriveLineupSettings(historicalLeague.data.rosterPositions);
 
-    for (const diagnostic of reconstructed.diagnostics) {
-      console.warn(`  [${diagnostic.code}] ${diagnostic.message}`);
-      if (diagnostic.level === 'error') {
-        keeperReconstructionErrorCount += 1;
-      }
-    }
-
-    // The picks above are the evidence behind every keeper cost this season. Deriving the
-    // costs and discarding the picks left `prior_season_round` unauditable: a number with
-    // nothing in the database to check it against. They are kept from here on.
-    //
-    // Franchise identity is owner-derived and league-scoped, and the league id here is the
-    // stable root from the continuity chain, so a manager resolves to the same franchise in
-    // both seasons and a prior selection can be attributed to whoever actually made it.
-    try {
-      const priorLeague = await adapter.getLeague(priorLeagueId);
-      const priorRosters = await adapter.getLeagueRosters(priorLeagueId);
-      const priorUsers = await adapter.getLeagueUsers(priorLeagueId);
-      const priorFranchiseMap = buildFranchiseMap({
-        leagueId,
-        rosters: priorRosters.data,
-        users: priorUsers.data,
-      });
-      const priorTeamCount = priorDraft.teamCount ?? priorLeague.data.totalRosters;
-      const priorRounds =
-        priorDraft.rounds ?? draftRoundsFallback(priorPicks.data.length, priorTeamCount);
-      const priorLineup = deriveLineupSettings(priorLeague.data.rosterPositions);
-
-      priorSeason = {
-        seasonId: `season:${priorLeagueId}` as SeasonId,
-        sleeperLeagueId: priorLeagueId,
-        seasonYear: Number.parseInt(priorLeague.data.season, 10),
-        status: priorLeague.data.status,
-        sleeperDraftId: priorDraft.sleeperDraftId,
-        leagueName: priorLeague.data.name,
-        teamCount: priorTeamCount,
-        draftRounds: priorRounds,
-        scoringSettings: priorLeague.data.scoringSettings as Record<string, unknown>,
-        lineup: (priorLineup.qb + priorLineup.rb + priorLineup.wr > 0
-          ? priorLineup
-          : LEAGUE_LINEUP) as unknown as Record<string, unknown>,
-        rules: deriveLeagueRules({
-          settings: priorLeague.data.settings,
-          policy: RECORDED_LEAGUE_POLICY,
-          teamCount: priorTeamCount,
-          draftRounds: priorRounds,
-          thirdRoundReversal: undefined,
-        }).rules as unknown as Record<string, unknown>,
-        franchises: priorFranchiseMap.mapped.map((entry) => ({
-          franchise: { id: entry.franchiseId, leagueId, displayName: entry.displayName },
-          sleeperRosterId: entry.rosterId,
-          sleeperOwnerId: entry.ownerSleeperUserId,
-          identitySource: entry.source,
-        })),
-        selections: priorPicks.data,
-        rosterIdToFranchiseId: priorFranchiseMap.rosterIdToFranchiseId,
-      };
-    } catch (error) {
-      // The prior season is a historical record, not something this season's correctness
-      // depends on. Failing to capture it is reported and the import continues.
-      console.warn(
-        `\n  Could not capture the prior season for persistence: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
+    return {
+      seasonId: `season:${historicalLeagueId}` as SeasonId,
+      sleeperLeagueId: historicalLeagueId,
+      seasonYear: Number.parseInt(historicalLeague.data.season, 10),
+      status: historicalLeague.data.status,
+      sleeperDraftId: draft.sleeperDraftId,
+      leagueName: historicalLeague.data.name,
+      teamCount: historicalTeamCount,
+      draftRounds: historicalRounds,
+      scoringSettings: historicalLeague.data.scoringSettings as Record<string, unknown>,
+      lineup: (historicalLineup.qb + historicalLineup.rb + historicalLineup.wr > 0
+        ? historicalLineup
+        : LEAGUE_LINEUP) as unknown as Record<string, unknown>,
+      rules: deriveLeagueRules({
+        settings: historicalLeague.data.settings,
+        policy: RECORDED_LEAGUE_POLICY,
+        teamCount: historicalTeamCount,
+        draftRounds: historicalRounds,
+        thirdRoundReversal: undefined,
+      }).rules as unknown as Record<string, unknown>,
+      franchises: historicalFranchiseMap.mapped.map((entry) => ({
+        franchise: { id: entry.franchiseId, leagueId, displayName: entry.displayName },
+        sleeperRosterId: entry.rosterId,
+        sleeperOwnerId: entry.ownerSleeperUserId,
+        identitySource: entry.source,
+      })),
+      selections: picks.data,
+      rosterIdToFranchiseId: historicalFranchiseMap.rosterIdToFranchiseId,
+    };
+  } catch (error) {
+    console.warn(
+      `\n  Could not capture season ${historicalLeagueId}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return null;
   }
 }
 
@@ -330,76 +360,86 @@ const playerCount = await repository.savePlayers(
     .filter((player): player is NonNullable<typeof player> => player !== undefined),
 );
 
-// The prior season, written before its selections so the foreign keys resolve: the season
+// Each past season, written before its selections so the foreign keys resolve: the season
 // row, then the franchises the picks are attributed to, then the players they took.
 //
 // Every write here is an upsert and none of them replace. A completed draft does not lose
 // picks, so there is no stale row to prune, and a failed read must never be able to delete
 // a historical record it simply could not see.
-let priorSelectionCount = 0;
+//
+// Seasons are written oldest first so that `previous_sleeper_league_id` always points at a
+// row that already exists, making the stored chain walkable in the same direction Sleeper's
+// is.
+let historicalSelectionCount = 0;
 
-if (priorSeason) {
+for (const season of [...historicalSeasons].sort(
+  (left, right) => left.seasonYear - right.seasonYear,
+)) {
+  const previousInChain =
+    historicalSeasons.find((candidate) => candidate.seasonYear === season.seasonYear - 1)
+      ?.sleeperLeagueId ?? null;
+
   await repository.saveLeagueSeason({
     leagueId,
-    leagueName: priorSeason.leagueName,
+    leagueName: season.leagueName,
     rulesVersion: '2026.1',
-    seasonId: priorSeason.seasonId,
-    seasonYear: priorSeason.seasonYear,
-    sleeperLeagueId: priorSeason.sleeperLeagueId,
-    previousSleeperLeagueId: null,
-    status: priorSeason.status,
-    sleeperDraftId: priorSeason.sleeperDraftId,
-    teamCount: priorSeason.teamCount,
-    draftRounds: priorSeason.draftRounds,
-    scoringSettings: priorSeason.scoringSettings,
-    lineup: priorSeason.lineup,
-    rules: priorSeason.rules,
+    seasonId: season.seasonId,
+    seasonYear: season.seasonYear,
+    sleeperLeagueId: season.sleeperLeagueId,
+    previousSleeperLeagueId: previousInChain,
+    status: season.status,
+    sleeperDraftId: season.sleeperDraftId,
+    teamCount: season.teamCount,
+    draftRounds: season.draftRounds,
+    scoringSettings: season.scoringSettings,
+    lineup: season.lineup,
+    rules: season.rules,
   });
 
-  await repository.saveFranchises(priorSeason.seasonId, priorSeason.franchises);
+  await repository.saveFranchises(season.seasonId, season.franchises);
 
-  const priorPlayerIds = [
+  const seasonPlayerIds = [
     ...new Set(
-      priorSeason.selections
+      season.selections
         .map((selection) => selection.sleeperPlayerId)
         .filter((id): id is string => id !== null),
     ),
   ];
-  const priorPlayers = await repository.readPlayersBySleeperId(priorPlayerIds);
-  const priorUnmatchedPlayerCount = priorPlayerIds.filter((id) => !priorPlayers.has(id)).length;
+  const seasonPlayers = await repository.readPlayersBySleeperId(seasonPlayerIds);
+  const unmatchedPlayerCount = seasonPlayerIds.filter((id) => !seasonPlayers.has(id)).length;
 
   await repository.savePlayers(
-    priorPlayerIds
-      .map((sleeperPlayerId) => priorPlayers.get(sleeperPlayerId))
+    seasonPlayerIds
+      .map((sleeperPlayerId) => seasonPlayers.get(sleeperPlayerId))
       .filter((player): player is NonNullable<typeof player> => player !== undefined),
   );
 
   // A pick whose player or roster cannot be resolved is still recorded, with the unresolved
   // side left null. The row is evidence the pick happened; dropping it would put a hole in
   // the very record this exists to make auditable.
-  priorSelectionCount = await repository.saveDraftSelections(
-    priorSeason.selections.map((selection) => ({
+  historicalSelectionCount += await repository.saveDraftSelections(
+    season.selections.map((selection) => ({
       sleeperDraftId: selection.sleeperDraftId,
-      seasonId: priorSeason!.seasonId,
+      seasonId: season.seasonId,
       overallPick: selection.pickNo,
       round: selection.round,
       slot: selection.draftSlot,
       franchiseId:
         selection.rosterId === null
           ? null
-          : (priorSeason!.rosterIdToFranchiseId[selection.rosterId] ?? null),
+          : (season.rosterIdToFranchiseId[selection.rosterId] ?? null),
       playerId:
         selection.sleeperPlayerId === null
           ? null
-          : (priorPlayers.get(selection.sleeperPlayerId)?.id ?? null),
+          : (seasonPlayers.get(selection.sleeperPlayerId)?.id ?? null),
       isKeeper: selection.isKeeper,
       source: 'sleeper' as const,
     })),
   );
 
-  if (priorUnmatchedPlayerCount > 0) {
+  if (unmatchedPlayerCount > 0) {
     console.warn(
-      `\n  ${priorUnmatchedPlayerCount} player(s) from the ${priorSeason.seasonYear} draft are not in ` +
+      `\n  ${unmatchedPlayerCount} player(s) from the ${season.seasonYear} draft are not in ` +
         'the catalog; those selections were recorded without a player link.',
     );
   }
@@ -488,8 +528,13 @@ console.log(
 );
 console.log(`  keeper decisions  ${decisionCount} (declared)${removedSuffix(decisions.removed)}`);
 console.log(
-  `  prior selections  ${priorSelectionCount}` +
-    (priorSeason ? ` (${priorSeason.seasonYear} draft)` : ' (no prior season captured)'),
+  `  past selections   ${historicalSelectionCount}` +
+    (historicalSeasons.length > 0
+      ? ` (${historicalSeasons.length} season(s): ${historicalSeasons
+          .map((season) => season.seasonYear)
+          .sort()
+          .join(', ')})`
+      : ' (no past season captured)'),
 );
 
 console.log('\nRead back from the database');
